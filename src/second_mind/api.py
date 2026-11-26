@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from . import __version__
 from .agents import AGENTS
 from .config import AppSettings
 from .container import Container
@@ -54,7 +56,7 @@ def create_app(container: Container | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Second Mind Core",
-        version="0.1.0",
+        version=__version__,
         description="Loopback-only API for the Second Mind desktop and gateways.",
         lifespan=lifespan,
     )
@@ -69,6 +71,10 @@ def create_app(container: Container | None = None) -> FastAPI:
         return JSONResponse(status_code=409, content={"detail": str(exc), "component": "updates"})
 
     router = APIRouter(prefix="/api")
+
+    @router.get("/ping")
+    async def ping() -> dict[str, Any]:
+        return {"status": "ok", "version": __version__, "pid": os.getpid()}
 
     @router.get("/health")
     async def health() -> dict[str, Any]:
@@ -356,14 +362,27 @@ def create_app(container: Container | None = None) -> FastAPI:
     async def check_updates() -> dict[str, Any]:
         return await target.updates.check()
 
-    @router.post("/updates/download")
+    @router.get("/updates/status")
+    async def update_status() -> dict[str, Any]:
+        return target.updates.status()
+
+    @router.post("/updates/download", status_code=202)
     async def download_update() -> dict[str, Any]:
-        return await target.updates.download()
+        return target.updates.start_download()
+
+    @router.post("/updates/cancel")
+    async def cancel_update() -> dict[str, Any]:
+        return await target.updates.cancel_download()
 
     @router.post("/updates/install", status_code=202)
     async def install_update(path: str) -> dict[str, Any]:
-        await target.updates.install(Path(path))
-        return {"status": "installer_started"}
+        prepared = await target.updates.prepare_install(Path(path))
+        return {
+            **prepared,
+            "data_dir": str(target.settings.data_dir),
+            "api_url": target.settings.api_url,
+            "current_version": __version__,
+        }
 
     @router.post("/system/shutdown", status_code=202)
     async def shutdown(request: Request) -> dict[str, Any]:

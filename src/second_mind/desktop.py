@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -9,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,7 +29,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QSystemTrayIcon,
     QTableWidget,
@@ -111,7 +115,7 @@ class ServiceController:
 
     def running(self) -> bool:
         try:
-            return httpx.get(f"{self.api_url}/api/health", timeout=1).is_success
+            return httpx.get(f"{self.api_url}/api/ping", timeout=2).is_success
         except httpx.HTTPError:
             return False
 
@@ -140,12 +144,12 @@ class ServiceController:
             close_fds=True,
             creationflags=flags,
         )
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             if self.running():
                 return
             time.sleep(0.25)
-        raise RuntimeError("Second Mind Core did not start within 15 seconds")
+        raise RuntimeError("Second Mind Core did not start within 120 seconds")
 
 
 class BasePage(QWidget):
@@ -473,8 +477,6 @@ class SettingsPage(BasePage):
         self.whisper_device = QComboBox()
         self.whisper_device.addItems(["cpu", "cuda", "auto"])
         self.autostart = QCheckBox("Автозапуск Core при входе в Windows")
-        self.update_repository = QLineEdit()
-        self.update_repository.setPlaceholderText("owner/second-mind")
         for label, widget in (
             ("LM Studio URL", self.llm_url),
             ("Модель", self.model),
@@ -484,7 +486,6 @@ class SettingsPage(BasePage):
             ("Whisper", self.whisper_model),
             ("Устройство", self.whisper_device),
             ("Автозапуск", self.autostart),
-            ("GitHub обновления", self.update_repository),
         ):
             form.addRow(label, widget)
         self.layout.addLayout(form)
@@ -493,8 +494,6 @@ class SettingsPage(BasePage):
         save.clicked.connect(self.save)
         theme = QPushButton("Сменить тему")
         theme.clicked.connect(theme_callback)
-        updates = QPushButton("Проверить обновления")
-        updates.clicked.connect(self.check_updates)
         speech_load = QPushButton("Загрузить Whisper")
         speech_load.clicked.connect(self.load_speech)
         speech_unload = QPushButton("Выгрузить Whisper")
@@ -503,7 +502,6 @@ class SettingsPage(BasePage):
         speech_test.clicked.connect(self.test_speech)
         controls.addWidget(save)
         controls.addWidget(theme)
-        controls.addWidget(updates)
         controls.addWidget(speech_load)
         controls.addWidget(speech_unload)
         controls.addWidget(speech_test)
@@ -523,7 +521,6 @@ class SettingsPage(BasePage):
         self.whisper_model.setCurrentText(value["whisper_model"])
         self.whisper_device.setCurrentText(value["whisper_device"])
         self.autostart.setChecked(value["autostart_enabled"])
-        self.update_repository.setText(value.get("update_repository") or "")
         self.telegram_token.setPlaceholderText("Настроен" if value["telegram_token_configured"] else "Не настроен")
 
     def save(self) -> None:
@@ -540,63 +537,10 @@ class SettingsPage(BasePage):
             "whisper_model": self.whisper_model.currentText(),
             "whisper_device": self.whisper_device.currentText(),
             "autostart_enabled": self.autostart.isChecked(),
-            "update_repository": self.update_repository.text().strip() or None,
         }
         if self.telegram_token.text():
             payload["telegram_token"] = self.telegram_token.text()
         self.work(lambda: self.client.request("PATCH", "/settings", json=payload), lambda result: (self.telegram_token.clear(), self.render(result), QMessageBox.information(self, "Second Mind", "Настройки сохранены")))
-
-    def check_updates(self) -> None:
-        repository = self.update_repository.text().strip() or None
-
-        def operation() -> dict[str, Any]:
-            self.client.request(
-                "PATCH", "/settings", json={"update_repository": repository}
-            )
-            return self.client.request("GET", "/updates/check", timeout=30)
-
-        self.work(
-            operation,
-            self.update_result,
-        )
-
-    def update_result(self, result: dict[str, Any]) -> None:
-        if not result["available"]:
-            QMessageBox.information(
-                self,
-                "Обновления",
-                f"Установлена актуальная версия {result['current_version']}.",
-            )
-            return
-        if not result["verified_download_supported"]:
-            self.show_error("Новая версия найдена, но у установщика нет SHA-256 digest.")
-            return
-        answer = QMessageBox.question(
-            self,
-            "Обновление",
-            f"Доступна версия {result['latest_version']}. Скачать проверенный установщик?",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self.work(
-                lambda: self.client.request("POST", "/updates/download", timeout=300),
-                self.update_downloaded,
-            )
-
-    def update_downloaded(self, result: dict[str, Any]) -> None:
-        answer = QMessageBox.question(
-            self,
-            "Обновление",
-            "SHA-256 проверен. Запустить установщик?",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self.work(
-                lambda: self.client.request(
-                    "POST", "/updates/install", params={"path": result["path"]}
-                ),
-                lambda _: QMessageBox.information(
-                    self, "Обновление", "Установщик запущен."
-                ),
-            )
 
     def load_speech(self) -> None:
         model = self.whisper_model.currentText()
@@ -643,6 +587,297 @@ class SettingsPage(BasePage):
                 f"Язык: {result['language']}\n\n{result['text']}",
             ),
         )
+
+
+class UpdatesPage(BasePage):
+    def __init__(self, client: ApiClient) -> None:
+        super().__init__(client, "Обновления")
+        self.release: dict[str, Any] | None = None
+        self.download: dict[str, Any] | None = None
+        self._manual_check = False
+
+        versions = QFrame()
+        versions.setObjectName("card")
+        version_layout = QFormLayout(versions)
+        self.current_version = QLabel("—")
+        self.available_version = QLabel("—")
+        self.authenticity = QLabel("Ожидание проверки")
+        self.authenticity.setWordWrap(True)
+        version_layout.addRow("Текущая версия", self.current_version)
+        version_layout.addRow("Доступная версия", self.available_version)
+        version_layout.addRow("Подлинность", self.authenticity)
+        self.layout.addWidget(versions)
+
+        options = QFormLayout()
+        self.repository = QLineEdit()
+        self.repository.setPlaceholderText("owner/repository")
+        self.automatic = QCheckBox("Проверять обновления автоматически")
+        self.interval = QSpinBox()
+        self.interval.setRange(1, 168)
+        self.interval.setSuffix(" ч")
+        options.addRow("GitHub Releases", self.repository)
+        options.addRow("Автопроверка", self.automatic)
+        options.addRow("Интервал", self.interval)
+        self.layout.addLayout(options)
+
+        controls = QHBoxLayout()
+        self.check_button = QPushButton("Проверить сейчас")
+        self.check_button.clicked.connect(lambda: self.check_updates(True))
+        save_button = QPushButton("Сохранить настройки")
+        save_button.clicked.connect(self.save_settings)
+        self.download_button = QPushButton("Скачать")
+        self.download_button.clicked.connect(self.start_download)
+        self.download_button.setEnabled(False)
+        self.cancel_button = QPushButton("Отменить")
+        self.cancel_button.clicked.connect(self.cancel_download)
+        self.cancel_button.setEnabled(False)
+        self.install_button = QPushButton("Установить и перезапустить")
+        self.install_button.clicked.connect(self.install_update)
+        self.install_button.setEnabled(False)
+        for button in (
+            self.check_button,
+            save_button,
+            self.download_button,
+            self.cancel_button,
+            self.install_button,
+        ):
+            controls.addWidget(button)
+        controls.addStretch()
+        self.layout.addLayout(controls)
+
+        self.status_label = QLabel("Проверка ещё не выполнялась.")
+        self.status_label.setWordWrap(True)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.changelog = QPlainTextEdit()
+        self.changelog.setReadOnly(True)
+        self.changelog.setPlaceholderText("CHANGELOG релиза появится после проверки.")
+        self.layout.addWidget(self.status_label)
+        self.layout.addWidget(self.progress)
+        self.layout.addWidget(QLabel("CHANGELOG"))
+        self.layout.addWidget(self.changelog, 1)
+
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(500)
+        self.poll_timer.timeout.connect(self.poll_download)
+        self.auto_timer = QTimer(self)
+        self.auto_timer.timeout.connect(lambda: self.check_updates(False))
+
+    def refresh(self) -> None:
+        self.work(lambda: self.client.request("GET", "/settings"), self.render_settings)
+        self.work(lambda: self.client.request("GET", "/updates/status"), self.render_status)
+
+    def render_settings(self, value: dict[str, Any]) -> None:
+        self.repository.setText(value.get("update_repository") or "")
+        self.automatic.setChecked(bool(value.get("automatic_update_checks", True)))
+        hours = int(value.get("update_check_interval_hours", 24))
+        self.interval.setValue(hours)
+        self.auto_timer.stop()
+        if self.automatic.isChecked():
+            self.auto_timer.start(hours * 60 * 60 * 1000)
+
+    def save_settings(self, notify: bool = True) -> None:
+        payload = {
+            "update_repository": self.repository.text().strip() or None,
+            "automatic_update_checks": self.automatic.isChecked(),
+            "update_check_interval_hours": self.interval.value(),
+        }
+
+        def saved(value: dict[str, Any]) -> None:
+            self.render_settings(value)
+            if notify:
+                QMessageBox.information(self, "Обновления", "Настройки сохранены.")
+
+        self.work(lambda: self.client.request("PATCH", "/settings", json=payload), saved)
+
+    def start_automatic_checks(self) -> None:
+        def configured(value: dict[str, Any]) -> None:
+            self.render_settings(value)
+            if self.automatic.isChecked():
+                self.check_updates(False)
+
+        self.work(lambda: self.client.request("GET", "/settings"), configured)
+
+    def check_updates(self, manual: bool) -> None:
+        if not self.repository.text().strip():
+            if manual:
+                self.show_error("Укажите GitHub-репозиторий обновлений.")
+            return
+        self._manual_check = manual
+        self.check_button.setEnabled(False)
+        self.status_label.setText("Проверяю GitHub Releases и подпись манифеста…")
+
+        def operation() -> dict[str, Any]:
+            self.client.request(
+                "PATCH",
+                "/settings",
+                json={
+                    "update_repository": self.repository.text().strip(),
+                    "automatic_update_checks": self.automatic.isChecked(),
+                    "update_check_interval_hours": self.interval.value(),
+                },
+            )
+            return self.client.request("GET", "/updates/check", timeout=45)
+
+        self.work(operation, self.render_release, self.check_failed)
+
+    def check_failed(self, message: str) -> None:
+        self.check_button.setEnabled(True)
+        self.status_label.setText(f"Проверка не выполнена: {message}")
+        if self._manual_check:
+            self.show_error(message)
+
+    def render_release(self, result: dict[str, Any]) -> None:
+        self.release = result
+        self.check_button.setEnabled(True)
+        self.current_version.setText(result["current_version"])
+        self.available_version.setText(result["latest_version"])
+        self.authenticity.setText("Подписанный Ed25519-манифест проверен")
+        self.changelog.setPlainText(result.get("changelog") or "Описание изменений отсутствует.")
+        self.download_button.setEnabled(bool(result["available"]))
+        if result["available"]:
+            self.status_label.setText(
+                f"Доступна версия {result['latest_version']}. Дистрибутив подписан и готов к скачиванию."
+            )
+        else:
+            self.status_label.setText(
+                f"Установлена актуальная версия {result['current_version']}."
+            )
+            if self._manual_check:
+                QMessageBox.information(self, "Обновления", self.status_label.text())
+
+    def start_download(self) -> None:
+        self.download_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.install_button.setEnabled(False)
+        self.progress.setValue(0)
+        self.status_label.setText("Начинаю защищённое скачивание…")
+        self.work(
+            lambda: self.client.request("POST", "/updates/download", timeout=30),
+            lambda _: self.poll_timer.start(),
+            self.download_failed,
+        )
+
+    def poll_download(self) -> None:
+        self.work(
+            lambda: self.client.request("GET", "/updates/status"),
+            self.render_status,
+            self.download_failed,
+        )
+
+    def render_status(self, status: dict[str, Any]) -> None:
+        phase = status.get("phase", "idle")
+        self.progress.setValue(int(status.get("progress_percent", 0)))
+        if phase in {"checking", "downloading"}:
+            received = int(status.get("bytes_received", 0)) / (1024 * 1024)
+            total = int(status.get("bytes_total", 0)) / (1024 * 1024)
+            self.status_label.setText(
+                f"Скачивание: {received:.1f} из {total:.1f} МБ"
+                if total
+                else "Проверяю метаданные релиза…"
+            )
+            self.cancel_button.setEnabled(True)
+            if not self.poll_timer.isActive():
+                self.poll_timer.start()
+        elif phase == "ready":
+            self.poll_timer.stop()
+            self.download = status.get("download")
+            self.cancel_button.setEnabled(False)
+            self.install_button.setEnabled(bool(self.download))
+            self.status_label.setText(
+                "Скачивание завершено. SHA-256 и подпись повторно проверены."
+            )
+        elif phase in {"failed", "cancelled"}:
+            self.poll_timer.stop()
+            self.cancel_button.setEnabled(False)
+            self.download_button.setEnabled(bool(self.release and self.release.get("available")))
+            self.status_label.setText(status.get("error") or "Скачивание отменено.")
+
+    def download_failed(self, message: str) -> None:
+        self.poll_timer.stop()
+        self.cancel_button.setEnabled(False)
+        self.download_button.setEnabled(bool(self.release and self.release.get("available")))
+        self.status_label.setText(f"Ошибка скачивания: {message}")
+        self.show_error(message)
+
+    def cancel_download(self) -> None:
+        self.work(
+            lambda: self.client.request("POST", "/updates/cancel"), self.render_status
+        )
+
+    def install_update(self) -> None:
+        if not self.download:
+            return
+        if not getattr(sys, "frozen", False):
+            self.show_error("Установка обновлений доступна в установленной Windows-версии.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Установка обновления",
+            "Second Mind закроется, Core будет остановлен, а база данных — сохранена в резервную копию. Продолжить?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.install_button.setEnabled(False)
+        self.status_label.setText("Финальная проверка дистрибутива…")
+        self.work(
+            lambda: self.client.request(
+                "POST",
+                "/updates/install",
+                params={"path": self.download["path"]},
+                timeout=120,
+            ),
+            self.launch_updater,
+            self.download_failed,
+        )
+
+    def launch_updater(self, prepared: dict[str, Any]) -> None:
+        install_dir = Path(sys.executable).resolve().parent.parent
+        bundled_updater = install_dir / "second-mind-updater.exe"
+        if not bundled_updater.exists():
+            self.show_error("Компонент обновления не найден. Переустановите Second Mind.")
+            self.install_button.setEnabled(True)
+            return
+        updater_copy = (
+            Path(prepared["data_dir"])
+            / "updates"
+            / f"second-mind-updater-{prepared['version']}.exe"
+        )
+        updater_copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bundled_updater, updater_copy)
+        command = [
+            str(updater_copy),
+            "--installer",
+            prepared["path"],
+            "--metadata",
+            prepared["metadata_path"],
+            "--install-dir",
+            str(install_dir),
+            "--data-dir",
+            prepared["data_dir"],
+            "--api-url",
+            prepared["api_url"],
+            "--desktop-pid",
+            str(os.getpid()),
+            "--current-version",
+            prepared["current_version"],
+        ]
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=(
+                getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            ),
+        )
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, MainWindow):
+                widget._force_quit = True
+        QApplication.quit()
 
 
 class SetupWizard(QWizard):
@@ -744,6 +979,7 @@ class MainWindow(QMainWindow):
         body.addWidget(self.stack, 1)
         self.setCentralWidget(root)
 
+        self.updates_page = UpdatesPage(client)
         self.pages: list[tuple[str, BasePage]] = [
             ("Dashboard", DashboardPage(client)),
             ("Чат", ChatPage(client)),
@@ -760,6 +996,7 @@ class MainWindow(QMainWindow):
             ("Документы", DocumentsPage(client)),
             ("Интеграции", DashboardPage(client)),
             ("Журнал событий", CrudTablePage(client, "Журнал событий", "/logs", [("created_at", "Время"), ("agent", "Компонент"), ("action", "Действие"), ("status", "Статус")])),
+            ("Обновления", self.updates_page),
             ("Настройки", SettingsPage(client, self.toggle_theme)),
         ]
         for name, page in self.pages:
@@ -769,6 +1006,7 @@ class MainWindow(QMainWindow):
         self.navigation.setCurrentRow(0)
         self._force_quit = False
         self._create_tray()
+        QTimer.singleShot(2500, self.updates_page.start_automatic_checks)
 
     def _create_tray(self) -> None:
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
@@ -838,6 +1076,35 @@ def main() -> None:
             raise SystemExit(0)
     window = MainWindow(client)
     window.show()
+    if "--post-update" in sys.argv:
+        index = sys.argv.index("--post-update")
+        version = sys.argv[index + 1] if index + 1 < len(sys.argv) else "новая"
+        QTimer.singleShot(
+            500,
+            lambda: QMessageBox.information(
+                window,
+                "Second Mind обновлён",
+                f"Версия {version} установлена. Core перезапущен, данные сохранены.",
+            ),
+        )
+    elif "--update-rolled-back" in sys.argv:
+        QTimer.singleShot(
+            500,
+            lambda: QMessageBox.warning(
+                window,
+                "Обновление отменено",
+                "Новая версия не прошла проверку запуска. Восстановлены предыдущая версия и резервная копия базы данных.",
+            ),
+        )
+    elif "--update-failed" in sys.argv:
+        QTimer.singleShot(
+            500,
+            lambda: QMessageBox.warning(
+                window,
+                "Обновление не установлено",
+                "Установка обновления завершилась ошибкой. Текущее состояние и журнал сохранены в каталоге данных updates.",
+            ),
+        )
     raise SystemExit(app.exec())
 
 

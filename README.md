@@ -4,7 +4,7 @@
 
 [English documentation](README.en.md) · [Архитектура](docs/architecture.md) · [Roadmap](ROADMAP.md) · [Безопасность](SECURITY.md)
 
-> Статус: **MVP 0.1.0**. Работают текстовые и голосовые сообщения, изображения, индексирование документов, задачи, память, напоминания, Telegram long polling, LM Studio tool calling и локальный MCP server. Подключение требует установленного LM Studio Runtime/Bionic и загруженной локальной модели. Прямой публичный API управления Bionic-сессиями не документирован; детали — в [исследовании](docs/bionic-research.md).
+> Статус: **0.2.0**. Работают текстовые и голосовые сообщения, изображения, индексирование документов, задачи, память, напоминания, Telegram long polling, LM Studio tool calling, локальный MCP server и полностью графическое обновление приложения. Подключение модели требует установленного LM Studio Runtime/Bionic. Прямой публичный API управления Bionic-сессиями не документирован; детали — в [исследовании](docs/bionic-research.md).
 
 ## Возможности
 
@@ -18,7 +18,27 @@
 - MCP-инструменты: задачи, память, заметки, проекты, напоминания и документы.
 - Секреты в Windows Credential Manager; конфигурационные файлы не содержат токенов.
 - Фактическая телеметрия CPU/RAM/GPU/VRAM, очереди, запросов и ошибок.
-- Проверка GitHub Releases и установка только после сверки опубликованного SHA-256 digest.
+- Отдельный экран обновлений: ручная/автоматическая проверка GitHub Releases, CHANGELOG и прогресс скачивания.
+- Подписанный Ed25519-манифест релиза и обязательная проверка SHA-256 перед запуском Setup.exe.
+- Транзакционное обновление: остановка Core/MCP, backup приложения и SQLite, health-check новой версии и автоматический rollback.
+
+## Установка Windows
+
+Скачайте единый `Second-Mind-Setup-<версия>.exe` из [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python и командная строка не нужны: установщик включает Core, Desktop, MCP, updater и все runtime-зависимости.
+
+Мастер установки создаёт ярлык в меню «Пуск», предлагает ярлык рабочего стола и автозапуск фонового Core. Эти параметры можно менять в GUI. Повторная установка и обновление используют тот же AppId и каталог программы. Пользовательские данные находятся отдельно, в `%LOCALAPPDATA%\Second Mind\Second Mind`, поэтому переустановка и обычное удаление приложения их не удаляют.
+
+## Обновления и восстановление
+
+Раздел «Обновления» показывает текущую и доступную версии, описание релиза и состояние доверенной проверки. При установке обновления отдельный updater:
+
+1. повторно проверяет подпись манифеста, имя, размер и SHA-256 Setup.exe;
+2. закрывает Desktop, штатно останавливает Core и завершает остальные процессы установленной версии;
+3. сохраняет копию каталога программы и консистентный SQLite backup в `%LOCALAPPDATA%\Second Mind\Second Mind\update-backups`;
+4. запускает Setup.exe без консоли, поднимает новый Core и проверяет точную версию через health API;
+5. при ошибке восстанавливает предыдущие файлы и базу данных, затем перезапускает рабочую версию.
+
+Журнал последней транзакции хранится в `%LOCALAPPDATA%\Second Mind\Second Mind\updates\update.log`. Цепочка доверия основана на Ed25519 public key, встроенном в приложение; CI хранит private key только в GitHub Actions secret `UPDATE_SIGNING_PRIVATE_KEY_B64`. При наличии сертификата CI дополнительно поддерживает Authenticode-подпись через `WINDOWS_SIGNING_CERTIFICATE_B64` и `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`.
 
 ## Быстрый запуск для разработки
 
@@ -76,10 +96,10 @@ pytest --cov=second_mind
 .\packaging\build.ps1
 ```
 
-Скрипт собирает Core, Desktop и MCP через PyInstaller, затем при наличии Inno Setup создаёт установщик. Те же шаги выполняет GitHub Actions.
+Скрипт собирает Core, Desktop, MCP и отдельный one-file updater через PyInstaller, затем Inno Setup создаёт единый установщик. Те же шаги выполняет GitHub Actions. Release workflow запускает unit-тесты, чистую установку, настоящую detached-транзакцию updater и обновление с предыдущего стабильного релиза с проверкой сохранности БД/настроек, создаёт подписанный update manifest и только затем публикует GitHub Release.
 
 ## Данные и приватность
 
-Данные хранятся в `%LOCALAPPDATA%\Second Mind`. По умолчанию разрешены только loopback LLM URL и loopback Core API. Внешние LLM не включаются неявно. Не коммитьте локальную БД, вложения или экспорт Credential Manager.
+Данные хранятся в `%LOCALAPPDATA%\Second Mind\Second Mind`. По умолчанию разрешены только loopback LLM URL и loopback Core API. Внешние LLM не включаются неявно. Не коммитьте локальную БД, вложения или экспорт Credential Manager.
 
 Лицензия: Apache-2.0.

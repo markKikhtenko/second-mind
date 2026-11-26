@@ -111,5 +111,7 @@ class SettingsPatch(BaseModel):
     setup_completed: bool | None = None
     autostart_enabled: bool | None = None
     update_repository: str | None = Field(default=None, max_length=200)
+    automatic_update_checks: bool | None = None
+    update_check_interval_hours: int | None = Field(default=None, ge=1, le=168)
     telegram_token: str | None = Field(default=None, max_length=500)
     llm_api_token: str | None = Field(default=None, max_length=2_000)

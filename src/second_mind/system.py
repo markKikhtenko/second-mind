@@ -72,3 +72,17 @@ def set_windows_autostart(enabled: bool) -> None:
         else:
             with suppress(FileNotFoundError):
                 winreg.DeleteValue(key, "SecondMindCore")
+
+
+def windows_autostart_enabled() -> bool:
+    if sys.platform != "win32":
+        return False
+    import winreg
+
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            value, _ = winreg.QueryValueEx(key, "SecondMindCore")
+            return bool(str(value).strip())
+    except FileNotFoundError:
+        return False

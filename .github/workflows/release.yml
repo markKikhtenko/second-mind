@@ -7,29 +7,145 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
-  build:
+  build-test-release:
     runs-on: windows-latest
+    env:
+      UPDATE_SIGNING_PRIVATE_KEY_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
+      WINDOWS_SIGNING_CERTIFICATE_B64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_B64 }}
+      WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m venv .venv
-      - run: .\.venv\Scripts\python.exe -m pip install -e ".[desktop,speech,build]"
-      - run: choco install innosetup --yes --no-progress
-      - run: .\packaging\build.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: second-mind-windows
-          path: |
-            dist/installer/*.exe
-            dist/second-mind-*/**
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: dist/installer/*.exe
-          generate_release_notes: true
 
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[desktop,speech,build,dev]"
+          choco install innosetup --yes --no-progress
+
+      - name: Verify source
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m ruff check .
+          .\.venv\Scripts\python.exe -m pytest --cov=second_mind --cov-report=term-missing
+
+      - name: Build Setup.exe
+        shell: pwsh
+        run: .\packaging\build.ps1
+
+      - name: Apply Authenticode signature when configured
+        if: env.WINDOWS_SIGNING_CERTIFICATE_B64 != ''
+        shell: pwsh
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP "second-mind-signing.pfx"
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_B64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object FullName -Match '\\x64\\signtool.exe$' |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe was not found" }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+            /f $certificatePath /p $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD `
+            (Get-ChildItem dist\installer\Second-Mind-Setup-*.exe -File -ErrorAction Stop).FullName
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed" }
+          Remove-Item -LiteralPath $certificatePath -Force
+
+      - name: Create signed update manifest
+        shell: pwsh
+        run: |
+          if (-not $env:UPDATE_SIGNING_PRIVATE_KEY_B64) { throw "UPDATE_SIGNING_PRIVATE_KEY_B64 is not configured" }
+          $version = .\.venv\Scripts\python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$version") {
+            throw "Release tag ${{ github.ref_name }} does not match project version v$version"
+          }
+          $installer = (Get-ChildItem dist\installer\Second-Mind-Setup-$version.exe -File -ErrorAction Stop).FullName
+          .\.venv\Scripts\python.exe packaging\release_manifest.py `
+            --installer $installer --version $version `
+            --repository "${{ github.repository }}" --output-dir dist\release
+
+      - name: Test clean install
+        shell: pwsh
+        run: |
+          $version = .\.venv\Scripts\python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $installer = (Get-ChildItem dist\installer\Second-Mind-Setup-$version.exe -File).FullName
+          .\packaging\test_installer.ps1 -CurrentInstaller $installer -CurrentVersion $version
+
+      - name: Test detached updater transaction
+        shell: pwsh
+        run: |
+          $version = .\.venv\Scripts\python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $installer = (Get-ChildItem dist\installer\Second-Mind-Setup-$version.exe -File).FullName
+          .\packaging\test_updater.ps1 -CurrentInstaller $installer -CurrentVersion $version `
+            -ReleaseMetadataDir (Resolve-Path dist\release).Path
+
+      - name: Download previous release installer
+        if: startsWith(github.ref, 'refs/tags/')
+        id: previous
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $currentTag = "${{ github.ref_name }}"
+          $release = gh api "repos/${{ github.repository }}/releases?per_page=20" |
+            ConvertFrom-Json |
+            Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -ne $currentTag } |
+            Select-Object -First 1
+          if (-not $release) { throw "No previous stable release is available for the upgrade test" }
+          $asset = $release.assets | Where-Object name -Like "Second-Mind-Setup-*.exe" | Select-Object -First 1
+          if (-not $asset) { throw "Previous release has no Windows installer" }
+          $directory = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "previous-release") -Force
+          $path = Join-Path $directory.FullName $asset.name
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $path
+          "path=$path" >> $env:GITHUB_OUTPUT
+          "version=$($release.tag_name.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Test upgrade from previous release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = .\.venv\Scripts\python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $installer = (Get-ChildItem dist\installer\Second-Mind-Setup-$version.exe -File).FullName
+          .\packaging\test_installer.ps1 -CurrentInstaller $installer -CurrentVersion $version `
+            -PreviousInstaller "${{ steps.previous.outputs.path }}" `
+            -PreviousVersion "${{ steps.previous.outputs.version }}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: second-mind-windows-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            dist/installer/Second-Mind-Setup-*.exe
+            dist/release/second-mind-release.json
+            dist/release/second-mind-release.json.sig
+            dist/release/SHA256SUMS.txt
+
+      - name: Attest installer provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/installer/Second-Mind-Setup-*.exe
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/installer/Second-Mind-Setup-*.exe
+            dist/release/second-mind-release.json
+            dist/release/second-mind-release.json.sig
+            dist/release/SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true

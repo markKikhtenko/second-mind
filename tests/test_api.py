@@ -27,6 +27,9 @@ def test_api_crud_and_health(container: Container) -> None:
         payload = health.json()
         assert payload["core"]["available"] is True
         assert payload["open_tasks"] == 1
+        ping = client.get("/api/ping").json()
+        assert ping["version"] == payload["core"]["version"]
+        assert ping["pid"] > 0
 
 
 def test_document_upload_indexes_real_text(container: Container) -> None:
@@ -38,4 +41,3 @@ def test_document_upload_indexes_real_text(container: Container) -> None:
         assert response.status_code == 201
         results = client.get("/api/documents/search", params={"q": "searchable"}).json()
         assert results[0]["filename"] == "notes.txt"
-

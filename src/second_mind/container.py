@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from . import __version__
@@ -17,6 +18,7 @@ from .repositories import (
     TaskRepository,
 )
 from .services import ChatService, DocumentService, SchedulerService, SpeechService
+from .system import windows_autostart_enabled
 from .telegram_gateway import TelegramGateway
 from .tools import SystemTools
 from .updates import UpdateService
@@ -31,6 +33,8 @@ class Container:
     ) -> None:
         self.config_manager = config_manager or ConfigManager()
         self.settings = settings or self.config_manager.load()
+        if sys.platform == "win32":
+            self.settings.autostart_enabled = windows_autostart_enabled()
         self.secrets = secret_store or SecretStore()
         self.db = Database(self.settings.database_path)
         self.tasks = TaskRepository(self.db)

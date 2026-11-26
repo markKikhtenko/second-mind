@@ -12,6 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 APP_NAME = "Second Mind"
 KEYRING_SERVICE = "SecondMind"
+DEFAULT_UPDATE_REPOSITORY = "markKikhtenko/second-mind"
+
+
+def default_data_dir() -> Path:
+    override = os.environ.get("SECOND_MIND_DATA_DIR")
+    return Path(override).expanduser().resolve() if override else user_data_path(APP_NAME, APP_NAME)
 
 
 class AppSettings(BaseModel):
@@ -19,7 +25,7 @@ class AppSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
-    data_dir: Path = Field(default_factory=lambda: user_data_path(APP_NAME, APP_NAME))
+    data_dir: Path = Field(default_factory=default_data_dir)
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8765, ge=1024, le=65535)
     llm_base_url: str = "http://127.0.0.1:1234"
@@ -33,7 +39,9 @@ class AppSettings(BaseModel):
     whisper_language: str | None = None
     setup_completed: bool = False
     autostart_enabled: bool = False
-    update_repository: str | None = None
+    update_repository: str | None = DEFAULT_UPDATE_REPOSITORY
+    automatic_update_checks: bool = True
+    update_check_interval_hours: int = Field(default=24, ge=1, le=168)
     log_level: str = "INFO"
 
     @field_validator("api_host")
@@ -67,7 +75,7 @@ class AppSettings(BaseModel):
 
 class ConfigManager:
     def __init__(self, path: Path | None = None) -> None:
-        default_dir = user_data_path(APP_NAME, APP_NAME)
+        default_dir = default_data_dir()
         self.path = path or default_dir / "config.json"
 
     def load(self) -> AppSettings:
@@ -77,6 +85,10 @@ class ConfigManager:
             return settings
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         raw.setdefault("data_dir", str(self.path.parent))
+        if "automatic_update_checks" not in raw and not raw.get("update_repository"):
+            # v0.1.0 stored an explicit null, which would otherwise suppress the
+            # new default release channel after an in-place upgrade.
+            raw["update_repository"] = DEFAULT_UPDATE_REPOSITORY
         return AppSettings.model_validate(raw)
 
     def save(self, settings: AppSettings) -> None:
