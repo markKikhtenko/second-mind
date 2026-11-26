@@ -1,0 +1,19 @@
+# Security policy
+
+## Defaults
+
+Second Mind is local-first. Core binds only to loopback and validation rejects non-loopback LLM URLs. Telegram uses long polling, so no inbound port is exposed. A non-empty User ID allowlist is mandatory. Secrets are stored via Windows Credential Manager and are never returned by the API.
+
+Retrieved memory, attachments, documents and forwarded messages are treated as untrusted content. They are isolated with data markers in model context. Tool arguments are validated by Pydantic; external actions have a separate permission level and are denied by the default agent context.
+
+## Reporting
+
+Do not open a public issue containing tokens, personal data, a local database or private prompts. Use GitHub private vulnerability reporting after the repository is published.
+
+## Known MVP boundaries
+
+- The local desktop user can access the loopback API; OS account isolation is the trust boundary.
+- SQLite and attachments are not encrypted at rest. Use BitLocker/EFS when device theft is in scope.
+- Local models vary in tool-call reliability. Tool validation limits effects but cannot guarantee correct intent interpretation.
+- Third-party MCP servers are not installed automatically. Review their permissions and source before adding them.
+
