@@ -31,6 +31,7 @@ from .repositories import (
     TaskRepository,
 )
 from .schemas import ChatResponse, MemoryCreate, TaskCreate, ToolEvent
+from .storage import StorageManager
 from .tools import SystemTools, ToolContext
 
 
@@ -298,9 +299,11 @@ class SchedulerService:
         self,
         reminders: ReminderRepository,
         logs: ExecutionLogRepository,
+        storage: StorageManager,
     ) -> None:
         self.reminders = reminders
         self.logs = logs
+        self.storage = storage
         self.telegram_sender: Any = None
         self.scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -311,6 +314,14 @@ class SchedulerService:
                 "interval",
                 seconds=20,
                 id="deliver-reminders",
+                max_instances=1,
+                coalesce=True,
+            )
+            self.scheduler.add_job(
+                self.storage.scheduled_backup,
+                "interval",
+                minutes=15,
+                id="storage-backup",
                 max_instances=1,
                 coalesce=True,
             )

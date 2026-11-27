@@ -14,7 +14,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -e ".[desktop,dev]"
       - run: ruff check .
       - run: pytest --cov=second_mind --cov-report=term-missing
-

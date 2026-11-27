@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -22,12 +23,17 @@ from .schemas import (
     MemoryCreate,
     MemoryUpdate,
     ProjectCreate,
+    ProjectUpdate,
     ReminderCreate,
+    ReminderUpdate,
     SettingsPatch,
+    StorageCleanupRequest,
+    StorageExportRequest,
+    StoragePathRequest,
     TaskCreate,
     TaskUpdate,
 )
-from .services import backup_data
+from .storage import StorageError
 from .system import diagnostics, set_windows_autostart
 from .updates import UpdateError
 
@@ -70,6 +76,10 @@ def create_app(container: Container | None = None) -> FastAPI:
     async def update_error(_: Request, exc: UpdateError) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc), "component": "updates"})
 
+    @app.exception_handler(StorageError)
+    async def storage_error(_: Request, exc: StorageError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc), "component": "storage"})
+
     router = APIRouter(prefix="/api")
 
     @router.get("/ping")
@@ -90,9 +100,13 @@ def create_app(container: Container | None = None) -> FastAPI:
         last_error = await target.db.fetch_one(
             "SELECT action,details_json,created_at FROM execution_log WHERE status='failed' ORDER BY created_at DESC LIMIT 1"
         )
+        recent_activity = await target.logs.list(8)
         return {
             "status": "ok",
             "time": utcnow(),
+            "uptime_seconds": max(
+                0, int((datetime.now(UTC) - target.started_at).total_seconds())
+            ),
             "core": {"available": True, "version": app.version},
             "llm": llm,
             "telegram": target.telegram.status(),
@@ -104,6 +118,8 @@ def create_app(container: Container | None = None) -> FastAPI:
             "requests": int((request_stats or {}).get("count", 0)),
             "average_request_ms": float((request_stats or {}).get("avg_ms", 0)),
             "last_error": last_error,
+            "recent_activity": recent_activity,
+            "updates": target.updates.status(),
             "system": diagnostics(),
         }
 
@@ -160,6 +176,21 @@ def create_app(container: Container | None = None) -> FastAPI:
             images=request.images,
         )
 
+    @router.get("/conversations")
+    async def conversations(limit: int = Query(100, ge=1, le=500)) -> list[dict[str, Any]]:
+        return await target.conversations.list(limit)
+
+    @router.get("/conversations/{conversation_id}/messages")
+    async def conversation_messages(
+        conversation_id: str, limit: int = Query(200, ge=1, le=1000)
+    ) -> list[dict[str, Any]]:
+        return await target.conversations.history(conversation_id, limit)
+
+    @router.delete("/conversations/{conversation_id}", status_code=204)
+    async def delete_conversation(conversation_id: str) -> None:
+        if not await target.conversations.delete(conversation_id):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
     @router.post("/tasks", status_code=201)
     async def create_task(value: TaskCreate) -> dict[str, Any]:
         return await target.tasks.create(value)
@@ -210,6 +241,18 @@ def create_app(container: Container | None = None) -> FastAPI:
     async def list_projects() -> list[dict[str, Any]]:
         return await target.projects.list()
 
+    @router.patch("/projects/{project_id}")
+    async def update_project(project_id: str, value: ProjectUpdate) -> dict[str, Any]:
+        project = await target.projects.update(project_id, value)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return project
+
+    @router.delete("/projects/{project_id}", status_code=204)
+    async def delete_project(project_id: str) -> None:
+        if not await target.projects.delete(project_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+
     @router.post("/reminders", status_code=201)
     async def create_reminder(value: ReminderCreate) -> dict[str, Any]:
         return await target.reminders.create(value)
@@ -220,6 +263,20 @@ def create_app(container: Container | None = None) -> FastAPI:
             "SELECT * FROM reminders ORDER BY status='delivered', due_at LIMIT ?", (limit,)
         )
 
+    @router.patch("/reminders/{reminder_id}")
+    async def update_reminder(
+        reminder_id: str, value: ReminderUpdate
+    ) -> dict[str, Any]:
+        reminder = await target.reminders.update(reminder_id, value)
+        if not reminder:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        return reminder
+
+    @router.delete("/reminders/{reminder_id}", status_code=204)
+    async def delete_reminder(reminder_id: str) -> None:
+        if not await target.reminders.delete(reminder_id):
+            raise HTTPException(status_code=404, detail="Reminder not found")
+
     @router.get("/documents")
     async def list_documents() -> list[dict[str, Any]]:
         return await target.documents.list()
@@ -227,6 +284,17 @@ def create_app(container: Container | None = None) -> FastAPI:
     @router.get("/documents/search")
     async def search_documents(q: str, limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
         return await target.documents.search(q, limit)
+
+    @router.get("/documents/{document_id}")
+    async def document_detail(document_id: str) -> dict[str, Any]:
+        document = await target.documents.get(document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {
+            key: value
+            for key, value in document.items()
+            if key not in {"storage_path", "sha256", "extracted_text"}
+        } | {"text_length": len(str(document.get("extracted_text") or ""))}
 
     @router.post("/documents", status_code=201)
     async def upload_document(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
@@ -294,6 +362,13 @@ def create_app(container: Container | None = None) -> FastAPI:
         await target.telegram.restart()
         return target.telegram.status()
 
+    @router.post("/telegram/test")
+    async def telegram_test() -> dict[str, Any]:
+        try:
+            return await target.telegram.test_connection()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @router.get("/agents")
     async def agents() -> list[dict[str, Any]]:
         return [
@@ -353,10 +428,50 @@ def create_app(container: Container | None = None) -> FastAPI:
             (limit,),
         )
 
+    @router.delete("/inbox/{item_id}", status_code=204)
+    async def delete_inbox_item(item_id: str) -> None:
+        if not await target.db.execute("DELETE FROM inbox WHERE id=?", (item_id,)):
+            raise HTTPException(status_code=404, detail="Inbox item not found")
+
     @router.post("/backup")
     async def backup(destination: str) -> dict[str, Any]:
         path = Path(destination).expanduser().resolve()
-        return {"path": str(await asyncio.to_thread(backup_data, target.settings, path))}
+        return {"path": str(await target.storage.create_backup(path))}
+
+    @router.get("/storage")
+    async def storage_status() -> dict[str, Any]:
+        return await target.storage.status()
+
+    @router.post("/storage/backup")
+    async def storage_backup(destination: str | None = None) -> dict[str, Any]:
+        path = Path(destination).expanduser().resolve() if destination else None
+        return {"path": str(await target.storage.create_backup(path))}
+
+    @router.post("/storage/restore")
+    async def storage_restore(value: StoragePathRequest) -> dict[str, Any]:
+        safety = await target.storage.restore(Path(value.path), confirmed=value.confirmed)
+        return {"ok": True, "safety_backup": str(safety)}
+
+    @router.post("/storage/export")
+    async def storage_export(value: StorageExportRequest) -> dict[str, Any]:
+        return {"path": str(await target.storage.export_json(Path(value.path)))}
+
+    @router.post("/storage/integrity")
+    async def storage_integrity() -> dict[str, Any]:
+        return await target.storage.integrity()
+
+    @router.post("/storage/optimize")
+    async def storage_optimize() -> dict[str, Any]:
+        return await target.storage.optimize()
+
+    @router.post("/storage/cleanup")
+    async def storage_cleanup(value: StorageCleanupRequest) -> dict[str, Any]:
+        return await target.storage.cleanup(confirmed=value.confirmed)
+
+    @router.post("/storage/move")
+    async def storage_move(value: StoragePathRequest) -> dict[str, Any]:
+        old, new = await target.storage.move(Path(value.path), confirmed=value.confirmed)
+        return {"from": str(old), "to": str(new)}
 
     @router.get("/updates/check")
     async def check_updates() -> dict[str, Any]:

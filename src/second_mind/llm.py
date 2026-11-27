@@ -90,7 +90,21 @@ class LMStudioProvider:
     async def health(self) -> dict[str, Any]:
         try:
             models = await self.list_models()
-            return {"available": True, "models": len(models), "error": None}
+            loaded = [item for item in models if item.get("loaded_instances")]
+            selected = self.settings.llm_model
+            if not selected and (loaded or models):
+                model = (loaded or models)[0]
+                selected = str(model.get("key") or model.get("id") or model.get("display_name"))
+            return {
+                "available": True,
+                "models": len(models),
+                "current_model": selected,
+                "error": None,
+            }
         except LLMUnavailable as exc:
-            return {"available": False, "models": 0, "error": str(exc)}
-
+            return {
+                "available": False,
+                "models": 0,
+                "current_model": self.settings.llm_model,
+                "error": str(exc),
+            }

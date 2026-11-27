@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from second_mind.api import create_app
@@ -41,3 +43,27 @@ def test_document_upload_indexes_real_text(container: Container) -> None:
         assert response.status_code == 201
         results = client.get("/api/documents/search", params={"q": "searchable"}).json()
         assert results[0]["filename"] == "notes.txt"
+
+
+def test_storage_api_reports_and_backs_up_real_database(container: Container) -> None:
+    with TestClient(create_app(container)) as client:
+        client.post("/api/tasks", json={"title": "Stored task"})
+        status = client.get("/api/storage")
+        assert status.status_code == 200
+        assert status.json()["counts"]["tasks"] == 1
+        assert status.json()["integrity"]["ok"] is True
+
+        backup = client.post("/api/storage/backup")
+        assert backup.status_code == 200
+        assert container.settings.backups_dir in Path(backup.json()["path"]).parents
+
+        changed = client.patch(
+            "/api/settings",
+            json={
+                "automatic_backups": False,
+                "backup_interval_hours": 12,
+                "backup_retention_days": 90,
+            },
+        )
+        assert changed.status_code == 200
+        assert changed.json()["backup_retention_days"] == 90

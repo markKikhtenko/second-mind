@@ -16,12 +16,17 @@ try {
         throw "Cannot read the project version."
     }
 
+    & $Python packaging/generate_icons.py
+    if ($LASTEXITCODE -ne 0) { throw "Icon generation failed with exit code $LASTEXITCODE" }
+
     & $Python -m PyInstaller --noconfirm --clean --windowed --onedir --name second-mind-core `
         --hidden-import keyring.backends.Windows --hidden-import faster_whisper `
         --collect-binaries ctranslate2 --collect-binaries av packaging/core_main.py
     if ($LASTEXITCODE -ne 0) { throw "Core build failed with exit code $LASTEXITCODE" }
 
     & $Python -m PyInstaller --noconfirm --clean --windowed --onedir --name second-mind-desktop `
+        --icon packaging/app-icon.ico `
+        --add-data "src/second_mind/assets;second_mind/assets" `
         --hidden-import keyring.backends.Windows packaging/desktop_main.py
     if ($LASTEXITCODE -ne 0) { throw "Desktop build failed with exit code $LASTEXITCODE" }
 

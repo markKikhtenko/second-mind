@@ -12,7 +12,9 @@ from .schemas import (
     MemoryCreate,
     MemoryUpdate,
     ProjectCreate,
+    ProjectUpdate,
     ReminderCreate,
+    ReminderUpdate,
     TaskCreate,
     TaskUpdate,
 )
@@ -215,6 +217,27 @@ class ProjectRepository:
             "SELECT * FROM projects ORDER BY status, updated_at DESC LIMIT ?", (limit,)
         )
 
+    async def get(self, project_id: str) -> dict[str, Any] | None:
+        return await self.db.fetch_one("SELECT * FROM projects WHERE id=?", (project_id,))
+
+    async def update(
+        self, project_id: str, value: ProjectUpdate
+    ) -> dict[str, Any] | None:
+        changes = value.model_dump(exclude_unset=True)
+        if not changes:
+            return await self.get(project_id)
+        if "name" in changes:
+            changes["name"] = changes["name"].strip()
+        changes["updated_at"] = utcnow()
+        assignments = ",".join(f"{key}=?" for key in changes)
+        await self.db.execute(
+            f"UPDATE projects SET {assignments} WHERE id=?", (*changes.values(), project_id)
+        )
+        return await self.get(project_id)
+
+    async def delete(self, project_id: str) -> bool:
+        return bool(await self.db.execute("DELETE FROM projects WHERE id=?", (project_id,)))
+
 
 class ConversationRepository:
     def __init__(self, db: Database) -> None:
@@ -266,6 +289,20 @@ class ConversationRepository:
         )
         return rows
 
+    async def list(self, limit: int = 100) -> list[dict[str, Any]]:
+        return await self.db.fetch_all(
+            """SELECT c.id,c.title,c.transport,c.created_at,c.updated_at,
+            COUNT(m.id) AS message_count
+            FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id
+            GROUP BY c.id ORDER BY c.updated_at DESC LIMIT ?""",
+            (limit,),
+        )
+
+    async def delete(self, conversation_id: str) -> bool:
+        return bool(
+            await self.db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        )
+
 
 class ReminderRepository:
     def __init__(self, db: Database) -> None:
@@ -298,6 +335,29 @@ class ReminderRepository:
         await self.db.execute(
             "UPDATE reminders SET status='delivered', delivered_at=? WHERE id=?",
             (utcnow(), reminder_id),
+        )
+
+    async def get(self, reminder_id: str) -> dict[str, Any] | None:
+        return await self.db.fetch_one("SELECT * FROM reminders WHERE id=?", (reminder_id,))
+
+    async def update(
+        self, reminder_id: str, value: ReminderUpdate
+    ) -> dict[str, Any] | None:
+        changes = value.model_dump(exclude_unset=True)
+        if "due_at" in changes and changes["due_at"] is not None:
+            changes["due_at"] = changes["due_at"].astimezone(UTC).isoformat()
+        if not changes:
+            return await self.get(reminder_id)
+        assignments = ",".join(f"{key}=?" for key in changes)
+        await self.db.execute(
+            f"UPDATE reminders SET {assignments} WHERE id=?",
+            (*changes.values(), reminder_id),
+        )
+        return await self.get(reminder_id)
+
+    async def delete(self, reminder_id: str) -> bool:
+        return bool(
+            await self.db.execute("DELETE FROM reminders WHERE id=?", (reminder_id,))
         )
 
 

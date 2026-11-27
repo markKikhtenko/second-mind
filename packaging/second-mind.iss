@@ -1,6 +1,6 @@
 #define MyAppName "Second Mind"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.0"
+  #define MyAppVersion "0.3.0"
 #endif
 #define MyAppPublisher "Second Mind Contributors"
 #define MyAppExeName "second-mind-desktop.exe"
@@ -33,21 +33,23 @@ UsePreviousAppDir=yes
 UninstallDisplayIcon={app}\second-mind-desktop\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 SetupLogging=yes
+SetupIconFile=app-icon.ico
 
 [Files]
 Source: "..\dist\second-mind-core\*"; DestDir: "{app}\second-mind-core"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\second-mind-desktop\*"; DestDir: "{app}\second-mind-desktop"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\second-mind-mcp\*"; DestDir: "{app}\second-mind-mcp"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\second-mind-updater.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "app-icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"
 Name: "autostart"; Description: "Запускать фоновый Core при входе в Windows"; GroupDescription: "Автозапуск:"
 
 [Icons]
-Name: "{group}\Second Mind"; Filename: "{app}\second-mind-desktop\{#MyAppExeName}"
+Name: "{group}\Second Mind"; Filename: "{app}\second-mind-desktop\{#MyAppExeName}"; IconFilename: "{app}\app-icon.ico"; IconIndex: 0
 Name: "{group}\Удалить Second Mind"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Second Mind"; Filename: "{app}\second-mind-desktop\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\Second Mind"; Filename: "{app}\second-mind-desktop\{#MyAppExeName}"; IconFilename: "{app}\app-icon.ico"; IconIndex: 0; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SecondMindCore"; ValueData: """{app}\second-mind-core\second-mind-core.exe"""; Flags: uninsdeletevalue; Tasks: autostart

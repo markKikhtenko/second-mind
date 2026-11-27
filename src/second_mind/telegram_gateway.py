@@ -86,6 +86,25 @@ class TelegramGateway:
         await self.stop()
         await self.start()
 
+    async def test_connection(self) -> dict[str, Any]:
+        token = self.secrets.get("telegram_bot_token")
+        if not token:
+            raise RuntimeError("Telegram bot token is not configured")
+        if self.bot:
+            profile = await self.bot.get_me()
+        else:
+            bot = Bot(token=token)
+            try:
+                profile = await bot.get_me()
+            finally:
+                await bot.session.close()
+        return {
+            "ok": True,
+            "username": profile.username,
+            "display_name": profile.full_name,
+            "id": profile.id,
+        }
+
     async def send(self, user_id: str, text: str) -> None:
         if not self.bot:
             raise RuntimeError("Telegram bot is not running")

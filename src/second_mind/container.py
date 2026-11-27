@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
@@ -18,6 +19,7 @@ from .repositories import (
     TaskRepository,
 )
 from .services import ChatService, DocumentService, SchedulerService, SpeechService
+from .storage import StorageManager
 from .system import windows_autostart_enabled
 from .telegram_gateway import TelegramGateway
 from .tools import SystemTools
@@ -31,6 +33,7 @@ class Container:
         config_manager: ConfigManager | None = None,
         secret_store: SecretStore | None = None,
     ) -> None:
+        self.started_at = datetime.now(UTC)
         self.config_manager = config_manager or ConfigManager()
         self.settings = settings or self.config_manager.load()
         if sys.platform == "win32":
@@ -44,6 +47,9 @@ class Container:
         self.reminders = ReminderRepository(self.db)
         self.inbox = InboxRepository(self.db)
         self.logs = ExecutionLogRepository(self.db)
+        self.storage = StorageManager(
+            self.settings, self.config_manager, self.db, self.logs
+        )
         self.documents = DocumentRepository(self.db)
         self.llm = LMStudioProvider(self.settings, self.secrets)
         self.speech = SpeechService(self.settings)
@@ -68,7 +74,7 @@ class Container:
             self.document_service,
         )
         self.tools.telegram_sender = self.telegram.send
-        self.scheduler = SchedulerService(self.reminders, self.logs)
+        self.scheduler = SchedulerService(self.reminders, self.logs, self.storage)
         self.scheduler.telegram_sender = self.telegram.send
         self.updates = UpdateService(self.settings, __version__)
 

@@ -4,6 +4,42 @@ All notable changes follow Keep a Changelog. Versions use Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-27
+
+### Added
+
+- Unified PySide6 design system with light, dark and system themes, shared tokens, reusable components and a consistent SVG icon set.
+- Branded Second Mind application icon for the window, tray, packaged EXE, installer, Start menu and desktop shortcut.
+- Grouped and collapsible navigation for Workspace, Intelligence Core and System sections.
+- Live non-blocking Dashboard with Core uptime, LM Studio/model, Telegram, Whisper, MCP, CPU, RAM, GPU, VRAM, requests, queue, activity, errors and update status.
+- Assistant conversation history, new/delete conversation actions, Markdown/code rendering, response copying, attachments, processing stages and tool-call summaries.
+- Search, filtering, sorting, record cards and create/edit/delete flows for tasks, memory, projects and reminders, plus document and inbox management.
+- Real LM Studio model discovery, Telegram token/connection testing and Whisper model/device/load/test/unload controls.
+- Storage Manager with database, attachment and backup sizes, category counts, free space, schema version, integrity and last-backup information.
+- WAL-safe SQLite Backup API archives containing the database, sanitized configuration and user attachments.
+- Scheduled backups, retention pruning, restore, JSON export, SQLite integrity checks, optimization, temporary-file cleanup and safe storage relocation.
+- Automated GUI construction tests, storage integration tests and real light/dark screenshots.
+
+### Changed
+
+- Rebuilt all desktop screens around the shared design system and Russian user-facing terminology.
+- Raw JSON is limited to advanced diagnostics; regular screens use human-readable dates, statuses and labels.
+- Long-running GUI operations use background workers so Dashboard, storage and diagnostics do not block Qt.
+- The existing v0.2 installer, secure update, application/database backup and rollback architecture remains compatible.
+- Application version is 0.3.0 across Python metadata, Core, Desktop and Inno Setup.
+
+### Fixed
+
+- Explicitly bound the packaged icon to Windows application identity and installed shortcut icon files.
+- Corrected Cyrillic font rendering in generated desktop screenshots.
+- Avoided late Qt worker signal delivery during application shutdown.
+
+### Security
+
+- Backup and export artifacts exclude secrets stored in Windows Credential Manager.
+- Restore archives are validated against path traversal and database corruption before replacement.
+- Destructive storage cleanup, restore and relocation operations require explicit confirmation.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

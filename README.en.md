@@ -1,24 +1,36 @@
 # Second Mind
 
-Second Mind is a local-first personal AI assistant for Windows. It combines an independently running Core service, a PySide6 desktop application, Telegram long polling, durable memory, tasks, document indexing, local speech recognition and an MCP server.
+Second Mind is a local-first personal AI assistant for Windows. It combines an independent Core service, a modern PySide6 desktop application, Telegram, durable memory, tasks, document processing, local speech recognition and an MCP server.
 
-[Русская документация](README.md) · [Architecture](docs/architecture.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
+[Русская документация](README.md) · [Architecture](docs/architecture.md) · [Storage](docs/storage.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
 
-## Status
+## Version 0.3.0
 
-Version 0.2.0 implements a working vertical path: configure LM Studio and Telegram in the GUI, send text or voice, let a local model call strictly validated tools, and persist tasks or knowledge in SQLite without using a console. Images and local PDF/DOCX/TXT indexing are included.
+Version 0.3.0 introduces a unified responsive design system, Russian-localized light/dark/system themes, a redesigned Dashboard and assistant, user-data management, and a complete local SQLite Storage Manager. Future features are explicitly labeled and never represented by demo data.
 
-The dedicated Updates screen checks GitHub Releases automatically or manually, shows the changelog and download progress, and accepts an installer only after verifying its Ed25519-signed manifest, source, version, size and SHA-256.
+| Dark | Light |
+| --- | --- |
+| ![Dashboard in dark theme](docs/screenshots/overview-dark.png) | ![Dashboard in light theme](docs/screenshots/overview-light.png) |
+| ![Storage in dark theme](docs/screenshots/storage-dark.png) | ![Storage in light theme](docs/screenshots/storage-light.png) |
 
-Bionic exposes documented user-facing projects, sessions and Skills, but no documented public API for programmatically starting and collecting Bionic agent sessions was found. Second Mind therefore uses the supported LM Studio Runtime REST and OpenAI-compatible APIs. See [the dated research note](docs/bionic-research.md).
+## Highlights
 
-## Windows installation and updates
+- Grouped, collapsible navigation and a compact live Core indicator.
+- Non-blocking Dashboard with real Core, LM Studio, model, Telegram, Whisper, MCP, CPU, RAM, GPU, VRAM, queue, request and error data.
+- Assistant history, Markdown and code rendering, copy actions, attachments, processing stages and transparent tool calls.
+- Search, filtering, sorting, record views and CRUD for tasks, memory, projects, documents, inbox and reminders.
+- Real LM Studio model discovery, Telegram connection test and Whisper lifecycle controls.
+- SQLite Backup API support that is safe with WAL, scheduled backups, retention, integrity checks, export, restore, optimization, cleanup and staged storage relocation.
+- Windows Credential Manager secrets; plain-text backup and export files never include tokens.
+- Ed25519/SHA-256 verified updates with application/database backup, health validation and rollback.
 
-Download the single `Second-Mind-Setup-<version>.exe` from [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). It bundles Python, Qt, Core, Desktop, MCP, the detached updater and all other runtime dependencies. Setup creates Start menu and optional desktop shortcuts and offers configurable Windows autostart.
+## Windows installation
 
-Program files are installed per user. Data remains separately under `%LOCALAPPDATA%\Second Mind\Second Mind`, so reinstall and normal uninstall preserve the database, attachments and settings. Before an update, the detached updater stops Core and installed helper processes, backs up both SQLite and the current application, installs silently, and validates the exact new Core version through its health API. Installer or health-check failures automatically restore the previous application and pre-migration database.
+Download `Second-Mind-Setup-0.3.0.exe` from [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python is not required. Setup bundles Core, Desktop, MCP, the detached updater and runtime dependencies, and creates correctly branded Start menu and optional desktop shortcuts.
 
-## Development setup
+Program files are installed per user. Data remains under `%LOCALAPPDATA%\Second Mind\Second Mind`, so normal reinstall and uninstall preserve the database, attachments and settings.
+
+## Development
 
 ```powershell
 py -3.12 -m venv .venv
@@ -27,18 +39,8 @@ python -m pip install -e ".[desktop,speech,dev]"
 second-mind-desktop
 ```
 
-LM Studio Runtime 0.4+ should listen on `http://127.0.0.1:1234` and have a local model available. The desktop starts Core as a detached process; closing the window leaves Core and Telegram running.
+LM Studio Runtime 0.4+ should listen on `http://127.0.0.1:1234`. The desktop starts Core as a detached process; closing the window keeps Core and Telegram available.
 
-## Security defaults
-
-- Core and LLM URLs are loopback-only.
-- Telegram starts only with a non-empty numeric allowlist.
-- Tokens are kept in Windows Credential Manager through `keyring`.
-- Documents, forwarded messages and retrieved memory are marked as untrusted data in the agent prompt.
-- External tools require explicit authorization; the default Personal Agent cannot send arbitrary Telegram messages.
-- Inbox operations are durable and idempotent.
-- Release metadata is authenticated by an embedded Ed25519 public key and rechecked by the detached updater.
-
-Run `ruff check .` and `pytest --cov=second_mind`. Build Windows artifacts with `packaging\build.ps1`. The release workflow also tests a clean Setup.exe install, a real detached-updater transaction and an upgrade from the previous stable release while preserving user data.
+Run `ruff check .` and `pytest --cov=second_mind`. Build Windows artifacts with `packaging\build.ps1`. The release workflow additionally validates a clean installation, a real detached-updater transaction and an upgrade from the previous stable release while preserving data and settings.
 
 Licensed under Apache-2.0.

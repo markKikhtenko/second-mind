@@ -18,4 +18,4 @@ Do not open a public issue containing tokens, personal data, a local database or
 - SQLite and attachments are not encrypted at rest. Use BitLocker/EFS when device theft is in scope.
 - Local models vary in tool-call reliability. Tool validation limits effects but cannot guarantee correct intent interpretation.
 - Third-party MCP servers are not installed automatically. Review their permissions and source before adding them.
-- The 0.2.0 public update key authenticates Second Mind release metadata. Protect the corresponding GitHub Actions secret and rotate it only through a compatibility release.
+- The embedded public update key authenticates Second Mind release metadata. Protect the corresponding GitHub Actions secret and rotate it only through a compatibility release.

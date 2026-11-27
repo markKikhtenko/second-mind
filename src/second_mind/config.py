@@ -42,6 +42,9 @@ class AppSettings(BaseModel):
     update_repository: str | None = DEFAULT_UPDATE_REPOSITORY
     automatic_update_checks: bool = True
     update_check_interval_hours: int = Field(default=24, ge=1, le=168)
+    automatic_backups: bool = True
+    backup_interval_hours: int = Field(default=24, ge=1, le=720)
+    backup_retention_days: int = Field(default=30, ge=1, le=3650)
     log_level: str = "INFO"
 
     @field_validator("api_host")
@@ -66,6 +69,10 @@ class AppSettings(BaseModel):
     @property
     def attachments_dir(self) -> Path:
         return self.data_dir / "attachments"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.data_dir / "backups"
 
     @property
     def api_url(self) -> str:

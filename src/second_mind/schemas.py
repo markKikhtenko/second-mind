@@ -58,6 +58,12 @@ class ProjectCreate(BaseModel):
     description: str = Field(default="", max_length=10_000)
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=10_000)
+    status: Literal["active", "paused", "completed", "archived"] | None = None
+
+
 class Project(ProjectCreate):
     id: str
     status: str
@@ -75,6 +81,19 @@ class ReminderCreate(BaseModel):
     @classmethod
     def require_timezone(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Reminder time must include a timezone offset")
+        return value
+
+
+class ReminderUpdate(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=2_000)
+    due_at: datetime | None = None
+    status: Literal["scheduled", "delivered", "cancelled"] | None = None
+
+    @field_validator("due_at")
+    @classmethod
+    def require_update_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError("Reminder time must include a timezone offset")
         return value
 
@@ -113,5 +132,21 @@ class SettingsPatch(BaseModel):
     update_repository: str | None = Field(default=None, max_length=200)
     automatic_update_checks: bool | None = None
     update_check_interval_hours: int | None = Field(default=None, ge=1, le=168)
+    automatic_backups: bool | None = None
+    backup_interval_hours: int | None = Field(default=None, ge=1, le=720)
+    backup_retention_days: int | None = Field(default=None, ge=1, le=3650)
     telegram_token: str | None = Field(default=None, max_length=500)
     llm_api_token: str | None = Field(default=None, max_length=2_000)
+
+
+class StoragePathRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=32_000)
+    confirmed: bool = False
+
+
+class StorageExportRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=32_000)
+
+
+class StorageCleanupRequest(BaseModel):
+    confirmed: bool = False
