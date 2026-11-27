@@ -1,10 +1,15 @@
 param(
-    [switch]$SkipInstaller
+    [switch]$SkipInstaller,
+    [string]$PythonExecutable
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$Python = if ($PythonExecutable) {
+    [System.IO.Path]::GetFullPath($PythonExecutable)
+} else {
+    Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+}
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "Create .venv and install second-mind[desktop,speech,build] first."
 }
@@ -20,6 +25,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Icon generation failed with exit code $LASTEXITCODE" }
 
     & $Python -m PyInstaller --noconfirm --clean --windowed --onedir --name second-mind-core `
+        --add-data "skills;skills" `
         --hidden-import keyring.backends.Windows --hidden-import faster_whisper `
         --collect-binaries ctranslate2 --collect-binaries av packaging/core_main.py
     if ($LASTEXITCODE -ne 0) { throw "Core build failed with exit code $LASTEXITCODE" }

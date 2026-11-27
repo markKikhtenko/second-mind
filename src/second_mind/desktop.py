@@ -39,12 +39,14 @@ from PySide6.QtWidgets import (
     QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -510,8 +512,11 @@ class DashboardPage(BasePage):
             f"Среднее время: {data.get('average_request_ms', 0):.0f} мс",
         )
         queue = data.get("queue", {})
+        orchestrator = data.get("orchestrator", {})
+        current = orchestrator.get("current") or {}
         self.metrics["queue"].set_value(
-            str(queue.get("pending", 0)), f"Ошибок: {queue.get('failed', 0)}"
+            str(orchestrator.get("queue_depth", 0)),
+            f"{current.get('agent_id', 'Свободно')} • inbox: {queue.get('pending', 0)}",
         )
         system = data.get("system", {})
         cpu = float(system.get("cpu_percent", 0))
@@ -775,6 +780,27 @@ class ChatPage(BasePage):
             layout.addWidget(line)
         self.messages.insertWidget(self.messages.count() - 1, card)
 
+    def add_trace(self, result: dict[str, Any]) -> None:
+        trace = result.get("trace") or []
+        if not trace:
+            return
+        card = QFrame()
+        card.setObjectName("subtleCard")
+        layout = QVBoxLayout(card)
+        title = QLabel(
+            f"Выполненные этапы · {result.get('agent_id', 'agent')} · "
+            f"{', '.join(result.get('skills') or []) or 'без Skills'}"
+        )
+        title.setStyleSheet("font-weight:650;")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        for item in trace:
+            line = QLabel(f"{item.get('at_ms', 0)} мс · {item.get('message', item.get('stage', 'этап'))}")
+            line.setProperty("role", "muted")
+            line.setWordWrap(True)
+            layout.addWidget(line)
+        self.messages.insertWidget(self.messages.count() - 1, card)
+
     def refresh(self) -> None:
         self.work(lambda: self.client.request("GET", "/conversations"), self.render_history)
 
@@ -900,6 +926,7 @@ class ChatPage(BasePage):
     def received(self, result: dict[str, Any]) -> None:
         self.conversation_id = result["conversation_id"]
         self.add_message("assistant", result["text"])
+        self.add_trace(result)
         self.add_tools(result.get("tool_events", []))
         self.stage.setText("Готово")
         self.send.setEnabled(True)
@@ -1597,6 +1624,486 @@ class InboxPage(RecordsPage):
 class ReadOnlyPage(RecordsPage):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs, can_create=False, can_edit=False, can_delete=False)
+
+
+class AgentDialog(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        row: dict[str, Any] | None,
+        tools: list[dict[str, Any]],
+        skills: list[dict[str, Any]],
+        models: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Настройка агента")
+        self.resize(860, 780)
+        root = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        form = QFormLayout(content)
+        self.name = QLineEdit(str((row or {}).get("name", "")))
+        self.description = QLineEdit(str((row or {}).get("description", "")))
+        self.enabled = QCheckBox("Агент включён")
+        self.enabled.setChecked(bool((row or {}).get("enabled", True)))
+        self.inherit = QCheckBox("Наследовать глобальную модель")
+        self.inherit.setChecked(bool((row or {}).get("inherit_global_model", True)))
+        self.model = QComboBox()
+        self.model.setEditable(True)
+        self.model.addItem("", None)
+        for item in models:
+            key = item.get("key") or item.get("id") or item.get("display_name")
+            if key:
+                self.model.addItem(str(item.get("display_name") or key), str(key))
+        current_model = (row or {}).get("model")
+        if current_model:
+            index = self.model.findData(current_model)
+            if index < 0:
+                self.model.addItem(str(current_model), str(current_model))
+                index = self.model.count() - 1
+            self.model.setCurrentIndex(index)
+        self.temperature = QDoubleSpinBox()
+        self.temperature.setRange(0, 2)
+        self.temperature.setSingleStep(0.05)
+        self.temperature.setValue(float((row or {}).get("temperature", 0.2)))
+        self.reasoning = QComboBox()
+        for title, value in (("Автоматически", None), ("Нет", "none"), ("Низкий", "low"), ("Средний", "medium"), ("Высокий", "high")):
+            self.reasoning.addItem(title, value)
+        self.reasoning.setCurrentIndex(max(0, self.reasoning.findData((row or {}).get("reasoning_effort"))))
+        self.context_limit = QSpinBox()
+        self.context_limit.setRange(1024, 1_000_000)
+        self.context_limit.setValue(int((row or {}).get("context_limit", 16_000)))
+        self.generation_limit = QSpinBox()
+        self.generation_limit.setRange(64, 100_000)
+        self.generation_limit.setValue(int((row or {}).get("generation_limit", 2_048)))
+        self.timeout = QSpinBox()
+        self.timeout.setRange(5, 900)
+        self.timeout.setSuffix(" с")
+        self.timeout.setValue(int((row or {}).get("timeout_seconds", 180)))
+        self.max_tools = QSpinBox()
+        self.max_tools.setRange(0, 64)
+        self.max_tools.setValue(int((row or {}).get("max_tool_calls", 8)))
+        self.memory = QComboBox()
+        self.memory.addItem("Релевантная память", "relevant")
+        self.memory.addItem("Без памяти", "none")
+        self.memory.setCurrentIndex(max(0, self.memory.findData((row or {}).get("memory_policy", "relevant"))))
+        self.confirmation = QComboBox()
+        self.confirmation.addItem("По политикам инструментов", "policy")
+        self.confirmation.addItem("Подтверждать изменения", "always")
+        self.confirmation.setCurrentIndex(max(0, self.confirmation.findData((row or {}).get("confirmation_policy", "policy"))))
+        self.prompt = QPlainTextEdit(str((row or {}).get("system_prompt", "")))
+        self.prompt.setMinimumHeight(150)
+        self.tools = QListWidget()
+        self.tools.setMinimumHeight(120)
+        selected_tools = set((row or {}).get("tools") or [])
+        for item in tools:
+            entry = QListWidgetItem(f"{item['name']} — {item.get('description', '')}")
+            entry.setData(Qt.ItemDataRole.UserRole, item["name"])
+            entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            entry.setCheckState(Qt.CheckState.Checked if item["name"] in selected_tools else Qt.CheckState.Unchecked)
+            self.tools.addItem(entry)
+        self.skills = QListWidget()
+        self.skills.setMinimumHeight(130)
+        selected_skills = set((row or {}).get("skills") or [])
+        for item in skills:
+            entry = QListWidgetItem(f"{item['name']} — {item.get('description', '')}")
+            entry.setData(Qt.ItemDataRole.UserRole, item["id"])
+            entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            entry.setCheckState(Qt.CheckState.Checked if item["id"] in selected_skills else Qt.CheckState.Unchecked)
+            self.skills.addItem(entry)
+        for label, widget in (
+            ("Название", self.name),
+            ("Описание", self.description),
+            ("Состояние", self.enabled),
+            ("Модель", self.inherit),
+            ("Выбор модели", self.model),
+            ("Temperature", self.temperature),
+            ("Reasoning effort", self.reasoning),
+            ("Лимит контекста", self.context_limit),
+            ("Лимит генерации", self.generation_limit),
+            ("Таймаут", self.timeout),
+            ("Макс. инструментов", self.max_tools),
+            ("Доступ к памяти", self.memory),
+            ("Подтверждения", self.confirmation),
+            ("Системный промпт", self.prompt),
+            ("Инструменты", self.tools),
+            ("Skills", self.skills),
+        ):
+            form.addRow(label, widget)
+        scroll.setWidget(content)
+        root.addWidget(scroll)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    @staticmethod
+    def checked_values(widget: QListWidget) -> list[str]:
+        return [
+            str(widget.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(widget.count())
+            if widget.item(index).checkState() == Qt.CheckState.Checked
+        ]
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name.text().strip(),
+            "description": self.description.text().strip(),
+            "system_prompt": self.prompt.toPlainText().strip(),
+            "enabled": self.enabled.isChecked(),
+            "model": self.model.currentData() or self.model.currentText().strip() or None,
+            "inherit_global_model": self.inherit.isChecked(),
+            "temperature": self.temperature.value(),
+            "reasoning_effort": self.reasoning.currentData(),
+            "context_limit": self.context_limit.value(),
+            "generation_limit": self.generation_limit.value(),
+            "timeout_seconds": self.timeout.value(),
+            "max_tool_calls": self.max_tools.value(),
+            "tools": self.checked_values(self.tools),
+            "skills": self.checked_values(self.skills),
+            "memory_policy": self.memory.currentData(),
+            "confirmation_policy": self.confirmation.currentData(),
+        }
+
+
+class AgentsPage(RecordsPage):
+    def __init__(self, client: ApiClient, theme: ThemeManager) -> None:
+        super().__init__(
+            client,
+            theme,
+            "Агенты",
+            "Профили, модели, Skills, инструменты, лимиты и политики выполнения.",
+            "/agents",
+            [
+                ("name", "Агент", None),
+                ("description", "Назначение", None),
+                ("enabled", "Состояние", lambda value: "Включён" if value else "Отключён"),
+                ("model", "Модель", lambda value: str(value or "Глобальная")),
+                ("skills", "Skills", lambda value: str(len(value or []))),
+            ],
+            "agents",
+            "Агенты не настроены",
+            "Создайте профиль или восстановите встроенные роли.",
+        )
+        self.actions.addWidget(self.button("Импорт", "inbox", self.import_agent))
+        self.actions.addWidget(self.button("Клонировать", "plus", self.clone_agent))
+        self.actions.addWidget(self.button("Экспорт", "documents", self.export_agent))
+        self.actions.addWidget(self.button("Сбросить", "refresh", self.reset_agent))
+        self.actions.addWidget(self.button("Тест", "assistant", self.test_agent, kind="primary"))
+
+    def catalogs(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        tools = self.client.request("GET", "/tools")
+        skills = self.client.request("GET", "/skills")
+        try:
+            models = self.client.request("GET", "/models")
+        except Exception:
+            models = []
+        return tools, skills, models
+
+    def create_record(self) -> None:
+        try:
+            tools, skills, models = self.catalogs()
+        except Exception as exc:
+            self.show_error(str(exc))
+            return
+        dialog = AgentDialog(self, None, tools, skills, models)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.work(lambda: self.client.request("POST", "/agents", json=dialog.payload()), lambda _value: self.refresh())
+
+    def edit_record(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        try:
+            tools, skills, models = self.catalogs()
+        except Exception as exc:
+            self.show_error(str(exc))
+            return
+        dialog = AgentDialog(self, row, tools, skills, models)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.work(lambda: self.client.request("PATCH", f"/agents/{row['id']}", json=dialog.payload()), lambda _value: self.refresh())
+
+    def clone_agent(self) -> None:
+        row = self.require_selected()
+        if row:
+            self.work(lambda: self.client.request("POST", f"/agents/{row['id']}/clone"), lambda _value: self.refresh())
+
+    def reset_agent(self) -> None:
+        row = self.require_selected()
+        if row:
+            self.work(lambda: self.client.request("POST", f"/agents/{row['id']}/reset"), lambda _value: self.refresh())
+
+    def import_agent(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Импорт агента", "", "Agent JSON (*.json)")
+        if path:
+            self.work(lambda: self.client.request("POST", "/agents/import", json={"path": path}), lambda _value: self.refresh())
+
+    def export_agent(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Экспорт агента", f"{row['id']}.json", "Agent JSON (*.json)")
+        if path:
+            self.work(lambda: self.client.request("POST", f"/agents/{row['id']}/export", json={"path": path}), lambda result: QMessageBox.information(self, "Экспорт", f"Сохранено: {result['path']}"))
+
+    def test_agent(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        text, ok = QInputDialog.getMultiLineText(self, "Тестовый запуск", row["name"], "Представься и кратко опиши свои возможности.")
+        if ok and text.strip():
+            self.work(
+                lambda: self.client.request("POST", "/playground", json={"text": text, "agent_id": row["id"], "mode": "dry_run"}, timeout=600),
+                lambda result: QMessageBox.information(self, "Результат теста", result["text"]),
+            )
+
+
+class SkillDialog(QDialog):
+    TEMPLATE = """---
+name: New Skill
+description: Краткое описание назначения Skill.
+version: 1.0.0
+---
+# Условия применения
+Опишите, когда использовать Skill.
+
+# Инструкции
+Опишите ожидаемое поведение.
+
+# Ограничения
+Опишите запреты и границы.
+
+# Примеры
+Ввод: пример. Поведение: ожидаемый результат.
+"""
+
+    def __init__(self, parent: QWidget, row: dict[str, Any] | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Редактор SKILL.md")
+        self.resize(820, 680)
+        layout = QVBoxLayout(self)
+        self.enabled = QCheckBox("Skill включён")
+        self.enabled.setChecked(bool((row or {}).get("enabled", True)))
+        self.content = QPlainTextEdit(str((row or {}).get("content") or self.TEMPLATE))
+        self.content.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(self.enabled)
+        layout.addWidget(self.content, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def payload(self) -> dict[str, Any]:
+        return {"content": self.content.toPlainText(), "enabled": self.enabled.isChecked()}
+
+
+class SkillsPage(RecordsPage):
+    def __init__(self, client: ApiClient, theme: ThemeManager) -> None:
+        super().__init__(
+            client,
+            theme,
+            "Skills",
+            "Версионируемая библиотека стандартных SKILL.md с прогрессивной загрузкой.",
+            "/skills",
+            [
+                ("name", "Skill", None),
+                ("description", "Описание", None),
+                ("version", "Версия", None),
+                ("enabled", "Состояние", lambda value: "Включён" if value else "Отключён"),
+                ("agents", "Агенты", lambda value: ", ".join(value or []) or "—"),
+            ],
+            "skills",
+            "Skills не найдены",
+            "Импортируйте SKILL.md или восстановите встроенную библиотеку.",
+        )
+        self.actions.addWidget(self.button("Импорт", "inbox", self.import_skill))
+        self.actions.addWidget(self.button("Экспорт", "documents", self.export_skill))
+        self.actions.addWidget(self.button("Вкл/выкл", "overview", self.toggle_skill))
+        self.actions.addWidget(self.button("Восстановить", "refresh", self.reset_skill))
+        self.actions.addWidget(self.button("Тест", "assistant", self.test_skill, kind="primary"))
+
+    def create_record(self) -> None:
+        dialog = SkillDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.work(lambda: self.client.request("POST", "/skills", json=dialog.payload()), lambda _value: self.refresh())
+
+    def edit_record(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        dialog = SkillDialog(self, row)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.work(lambda: self.client.request("PUT", f"/skills/{row['id']}", json=dialog.payload()), lambda _value: self.refresh())
+
+    def import_skill(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Импорт каталога Skills")
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Импорт SKILL.md", "", "SKILL.md (SKILL.md);;Markdown (*.md)")
+        if path:
+            self.work(lambda: self.client.request("POST", "/skills/import", json={"path": path}), lambda _value: self.refresh())
+
+    def export_skill(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        path = QFileDialog.getExistingDirectory(self, "Экспорт Skill")
+        if path:
+            self.work(lambda: self.client.request("POST", f"/skills/{row['id']}/export", json={"path": path}), lambda result: QMessageBox.information(self, "Экспорт", f"Сохранено: {result['path']}"))
+
+    def toggle_skill(self) -> None:
+        row = self.require_selected()
+        if row:
+            self.work(lambda: self.client.request("PATCH", f"/skills/{row['id']}/enabled", json={"enabled": not row["enabled"]}), lambda _value: self.refresh())
+
+    def reset_skill(self) -> None:
+        row = self.require_selected()
+        if row:
+            self.work(lambda: self.client.request("POST", f"/skills/{row['id']}/reset"), lambda _value: self.refresh())
+
+    def test_skill(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        text, ok = QInputDialog.getMultiLineText(self, "Тест Skill", row["name"], "Проверь применение этого Skill на запросе.")
+        if ok and text.strip():
+            self.work(
+                lambda: self.client.request("POST", "/playground", json={"text": text, "skill_ids": [row["id"]], "mode": "dry_run"}, timeout=600),
+                lambda result: QMessageBox.information(self, "Результат теста", result["text"]),
+            )
+
+
+class ToolsPage(ReadOnlyPage):
+    def __init__(self, client: ApiClient, theme: ThemeManager) -> None:
+        super().__init__(
+            client,
+            theme,
+            "MCP и инструменты",
+            "Схемы, backend-политики, подтверждения и фактическая история вызовов.",
+            "/tools",
+            [
+                ("name", "Инструмент", None),
+                ("description", "Описание", None),
+                ("permission", "Класс доступа", None),
+            ],
+            "tools",
+            "Инструменты не найдены",
+            "Проверьте состояние Core и MCP.",
+        )
+        self.actions.addWidget(self.button("Политика", "settings", self.set_policy))
+        self.actions.addWidget(self.button("История", "logs", self.show_history))
+        self.actions.addWidget(self.button("Подтверждения", "inbox", self.show_approvals, kind="primary"))
+
+    def set_policy(self) -> None:
+        row = self.require_selected()
+        if not row:
+            return
+        try:
+            agents = self.client.request("GET", "/agents")
+        except Exception as exc:
+            self.show_error(str(exc))
+            return
+        names = [f"{item['name']} ({item['id']})" for item in agents]
+        agent_name, ok = QInputDialog.getItem(self, "Политика", "Агент", names, 0, False)
+        if not ok:
+            return
+        agent = agents[names.index(agent_name)]
+        policy, ok = QInputDialog.getItem(self, "Политика", "Режим", ["auto", "confirm", "deny"], 0, False)
+        if ok:
+            self.work(lambda: self.client.request("PUT", f"/tools/{row['name']}/policy", json={"agent_id": agent["id"], "policy": policy, "timeout_seconds": 60}), lambda _value: QMessageBox.information(self, "Политика", "Политика сохранена."))
+
+    def _show_rows(self, title: str, rows: list[dict[str, Any]]) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(900, 520)
+        layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        text.setReadOnly(True)
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def show_history(self) -> None:
+        try:
+            self._show_rows("История инструментов", self.client.request("GET", "/tool-history"))
+        except Exception as exc:
+            self.show_error(str(exc))
+
+    def show_approvals(self) -> None:
+        try:
+            rows = self.client.request("GET", "/tool-approvals", params={"status": "pending"})
+        except Exception as exc:
+            self.show_error(str(exc))
+            return
+        if not rows:
+            QMessageBox.information(self, "Подтверждения", "Ожидающих действий нет.")
+            return
+        labels = [f"{row['tool_name']} · {row['agent_id']} · {row['id']}" for row in rows]
+        selected, ok = QInputDialog.getItem(self, "Подтверждение действия", "Действие", labels, 0, False)
+        if not ok:
+            return
+        row = rows[labels.index(selected)]
+        choice = QMessageBox.question(self, "Подтверждение", f"Выполнить {row['tool_name']}?\n{json.dumps(row['arguments'], ensure_ascii=False)}")
+        action = "approve" if choice == QMessageBox.StandardButton.Yes else "deny"
+        self.work(lambda: self.client.request("POST", f"/tool-approvals/{row['id']}/{action}"), lambda result: QMessageBox.information(self, "Подтверждение", "Действие обработано."))
+
+
+class PlaygroundPage(BasePage):
+    def __init__(self, client: ApiClient, theme: ThemeManager) -> None:
+        super().__init__(client, theme, "Agent Playground", "Безопасное тестирование агентов, Skills и инструментов с полной трассой этапов.")
+        controls = QHBoxLayout()
+        self.mode = QComboBox()
+        self.mode.addItem("Dry Run — без изменений", "dry_run")
+        self.mode.addItem("Execution — реальные действия", "execution")
+        self.agent = QComboBox()
+        self.agent.addItem("Автоматическая маршрутизация", None)
+        controls.addWidget(QLabel("Режим"))
+        controls.addWidget(self.mode)
+        controls.addWidget(QLabel("Агент"))
+        controls.addWidget(self.agent, 1)
+        controls.addWidget(self.button("Обновить", "refresh", self.refresh))
+        self.layout.addLayout(controls)
+        self.input = QPlainTextEdit()
+        self.input.setPlaceholderText("Введите тестовый запрос на русском языке…")
+        self.input.setMinimumHeight(150)
+        self.layout.addWidget(self.input)
+        self.run = self.button("Запустить сценарий", "assistant", self.execute, kind="primary")
+        self.layout.addWidget(self.run, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.output = QTextBrowser()
+        self.output.setPlaceholderText("Здесь появятся выбранный агент, Skills, этапы, инструменты и итоговый ответ.")
+        self.layout.addWidget(self.output, 1)
+
+    def refresh(self) -> None:
+        self.work(lambda: self.client.request("GET", "/agents"), self.render_agents)
+
+    def render_agents(self, rows: list[dict[str, Any]]) -> None:
+        current = self.agent.currentData()
+        self.agent.clear()
+        self.agent.addItem("Автоматическая маршрутизация", None)
+        for row in rows:
+            if row.get("enabled"):
+                self.agent.addItem(row["name"], row["id"])
+        self.agent.setCurrentIndex(max(0, self.agent.findData(current)))
+
+    def execute(self) -> None:
+        text = self.input.toPlainText().strip()
+        if not text:
+            return
+        self.run.setEnabled(False)
+        payload = {"text": text, "agent_id": self.agent.currentData(), "mode": self.mode.currentData()}
+        self.work(lambda: self.client.request("POST", "/playground", json=payload, timeout=600), self.render_result, self.failed)
+
+    def render_result(self, result: dict[str, Any]) -> None:
+        self.run.setEnabled(True)
+        stages = "\n".join(f"• {item.get('at_ms', 0)} мс — {item.get('message', item.get('stage'))}" for item in result.get("trace", []))
+        tools = "\n".join(f"• {item['name']}: {'OK' if item.get('result', {}).get('ok') else item.get('result', {}).get('message') or item.get('result', {}).get('error', 'ошибка')}" for item in result.get("tool_events", [])) or "• Не вызывались"
+        self.output.setPlainText(f"Run: {result.get('run_id')}\nАгент: {result.get('agent_id')}\nSkills: {', '.join(result.get('skills') or []) or '—'}\n\nЭтапы:\n{stages}\n\nИнструменты:\n{tools}\n\nОтвет:\n{result['text']}")
+
+    def failed(self, message: str) -> None:
+        self.run.setEnabled(True)
+        self.show_error(message)
 
 
 class TelegramPage(BasePage):
@@ -2892,7 +3399,9 @@ NAVIGATION = (
         (
             ("models", "Модели ИИ", "models", False),
             ("agents", "Агенты", "agents", False),
-            ("skills", "Skills", "skills", True),
+            ("skills", "Skills", "skills", False),
+            ("playground", "Agent Playground", "assistant", False),
+            ("runs", "Мониторинг", "logs", False),
             ("tools", "MCP и инструменты", "tools", False),
         ),
     ),
@@ -3078,48 +3587,29 @@ class MainWindow(QMainWindow):
                 "Модели не найдены",
                 "Запустите LM Studio Runtime и загрузите совместимую модель.",
             ),
-            "agents": ReadOnlyPage(
+            "agents": AgentsPage(client, theme),
+            "skills": SkillsPage(client, theme),
+            "playground": PlaygroundPage(client, theme),
+            "runs": ReadOnlyPage(
                 client,
                 theme,
-                "Агенты",
-                "Текущие встроенные роли без расширения архитектуры в этом релизе.",
-                "/agents",
+                "Мониторинг агентного исполнения",
+                "Фактические запуски, выбранные агенты, этапы, время и обращения к модели.",
+                "/agent-runs",
                 [
-                    ("name", "Агент", None),
-                    ("description", "Назначение", None),
-                    (
-                        "enabled",
-                        "Состояние",
-                        lambda value: "Включён" if value else "Отключён",
-                    ),
-                    ("tools", "Инструменты", lambda value: str(len(value or []))),
+                    ("started_at", "Запуск", local_datetime),
+                    ("agent_id", "Агент", None),
+                    ("stage", "Этап", None),
+                    ("status", "Статус", human_status),
+                    ("llm_calls", "LLM", lambda value: str(value or 0)),
+                    ("tool_calls", "Инструменты", lambda value: str(value or 0)),
+                    ("duration_ms", "Время", lambda value: f"{value or 0} мс"),
                 ],
-                "agents",
-                "Агенты не настроены",
-                "Встроенные роли появятся после запуска Core.",
+                "logs",
+                "Запусков пока нет",
+                "Запросы из Desktop, Telegram и Playground появятся здесь.",
             ),
-            "skills": ComingSoonPage(
-                client,
-                theme,
-                "Skills",
-                "Библиотека Agent Skills вынесена в отдельный этап разработки.",
-                "v0.4",
-            ),
-            "tools": ReadOnlyPage(
-                client,
-                theme,
-                "MCP и инструменты",
-                "Доступные локальные инструменты и уровень полномочий.",
-                "/tools",
-                [
-                    ("name", "Инструмент", None),
-                    ("description", "Описание", None),
-                    ("permission", "Доступ", lambda value: str(value)),
-                ],
-                "tools",
-                "Инструменты не найдены",
-                "Проверьте состояние Core и MCP.",
-            ),
+            "tools": ToolsPage(client, theme),
             "telegram": TelegramPage(client, theme),
             "integrations": ComingSoonPage(
                 client,
@@ -3204,7 +3694,7 @@ def main() -> None:
     if sys.platform == "win32":
         with suppress(OSError):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
-                "SecondMind.SecondMind.0.3"
+                "SecondMind.SecondMind.0.4"
             )
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

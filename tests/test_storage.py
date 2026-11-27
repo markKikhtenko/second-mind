@@ -55,7 +55,7 @@ async def test_storage_status_cleanup_and_move(container: Container, tmp_path: P
     temp_dir.mkdir()
     (temp_dir / "discard.tmp").write_bytes(b"temporary")
     status = await container.storage.status()
-    assert status["schema_version"] == 1
+    assert status["schema_version"] == 2
     assert status["integrity"]["ok"] is True
     assert status["counts"]["tasks"] == 0
 

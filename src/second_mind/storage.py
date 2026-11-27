@@ -48,6 +48,13 @@ class StorageManager:
         "inbox",
         "reminders",
         "execution_log",
+        "agent_configs",
+        "skills",
+        "agent_skills",
+        "tool_policies",
+        "tool_call_history",
+        "tool_approvals",
+        "agent_runs",
     )
 
     def __init__(
@@ -121,6 +128,7 @@ class StorageManager:
                 "database_path": str(self.settings.database_path),
                 "database_size": database_size,
                 "attachments_size": _directory_size(self.settings.attachments_dir),
+                "skills_size": _directory_size(self.settings.skills_dir),
                 "backups_size": sum(path.stat().st_size for path in backups),
                 "free_space": disk.free,
                 "total_space": disk.total,
@@ -164,12 +172,14 @@ class StorageManager:
                 shutil.copy2(self.config_manager.path, staging / "config.json")
             if self.settings.attachments_dir.exists():
                 shutil.copytree(self.settings.attachments_dir, staging / "attachments")
+            if self.settings.skills_dir.exists():
+                shutil.copytree(self.settings.skills_dir, staging / "skills")
             manifest = {
                 "format": "second-mind-backup",
                 "format_version": 1,
                 "application_version": __version__,
                 "created_at": datetime.now(UTC).isoformat(),
-                "includes": ["sqlite", "configuration", "attachments"],
+                "includes": ["sqlite", "configuration", "attachments", "skills"],
                 "secrets_included": False,
             }
             (staging / "backup-manifest.json").write_text(
@@ -275,6 +285,25 @@ class StorageManager:
                     rollback.replace(current)
                 raise
             shutil.rmtree(rollback, ignore_errors=True)
+
+            restored_skills = staging / "skills"
+            current_skills = self.settings.skills_dir
+            skills_rollback = current_skills.with_name(
+                f"skills.pre-restore-{uuid.uuid4().hex}"
+            )
+            if current_skills.exists():
+                current_skills.replace(skills_rollback)
+            try:
+                if restored_skills.exists():
+                    shutil.copytree(restored_skills, current_skills)
+                else:
+                    current_skills.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                shutil.rmtree(current_skills, ignore_errors=True)
+                if skills_rollback.exists():
+                    skills_rollback.replace(current_skills)
+                raise
+            shutil.rmtree(skills_rollback, ignore_errors=True)
 
             restored_config = staging / "config.json"
             if restored_config.exists():
@@ -409,6 +438,8 @@ class StorageManager:
                 shutil.copytree(self.settings.attachments_dir, staging / "attachments")
             if self.settings.backups_dir.exists():
                 shutil.copytree(self.settings.backups_dir, staging / "backups")
+            if self.settings.skills_dir.exists():
+                shutil.copytree(self.settings.skills_dir, staging / "skills")
             integrity = self._integrity(staging / "second-mind.db")
             if not integrity["ok"]:
                 raise StorageError(f"Перенесённая база не прошла проверку: {integrity['message']}")
@@ -420,6 +451,7 @@ class StorageManager:
         old_database = self.settings.database_path
         old_attachments = self.settings.attachments_dir
         old_backups = self.settings.backups_dir
+        old_skills = self.settings.skills_dir
         with closing(sqlite3.connect(destination / "second-mind.db")) as connection:
             rows = connection.execute("SELECT id,storage_path FROM documents").fetchall()
             for document_id, storage_path in rows:
@@ -431,6 +463,21 @@ class StorageManager:
                 connection.execute(
                     "UPDATE documents SET storage_path=? WHERE id=?",
                     (str(destination / "attachments" / relative), document_id),
+                )
+            skill_rows = connection.execute(
+                "SELECT id,source_path FROM skills WHERE is_builtin=0 OR source_path LIKE ?",
+                (f"{old_skills}%",),
+            ).fetchall()
+            for skill_id, source_path in skill_rows:
+                if not source_path:
+                    continue
+                try:
+                    relative = Path(str(source_path)).relative_to(old_skills)
+                except ValueError:
+                    continue
+                connection.execute(
+                    "UPDATE skills SET source_path=? WHERE id=?",
+                    (str(destination / "skills" / relative), skill_id),
                 )
             connection.commit()
 
@@ -445,6 +492,7 @@ class StorageManager:
             path.unlink(missing_ok=True)
         shutil.rmtree(old_attachments, ignore_errors=True)
         shutil.rmtree(old_backups, ignore_errors=True)
+        shutil.rmtree(old_skills, ignore_errors=True)
         return source_dir, destination
 
     async def move(self, destination: Path, *, confirmed: bool) -> tuple[Path, Path]:

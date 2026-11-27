@@ -8,6 +8,7 @@ The default data directory is `%LOCALAPPDATA%\Second Mind\Second Mind` and conta
 
 - `second-mind.db` — the SQLite database;
 - `attachments` — user documents and media;
+- `skills` — custom `SKILL.md` files and built-in overrides;
 - `backups` — Storage Manager archives;
 - `updates` and `update-backups` — secure updater state;
 - `config.json` — non-secret application configuration.
@@ -21,7 +22,10 @@ Backups are ZIP archives created from a consistent SQLite snapshot through `sqli
 - the SQLite snapshot;
 - sanitized application configuration;
 - user attachments;
+- custom Skills and built-in Skill overrides;
 - a versioned manifest with creation time and file metadata.
+
+Agent definitions, Skill bindings, tool policies, approvals and execution history live in SQLite and are therefore included in the same transactionally consistent snapshot. Migration 2 upgrades a v0.3 database in place without rewriting existing user tables.
 
 Automatic backup can be enabled in Settings. The interval and retention period are configurable; expired archives are pruned after a successful backup.
 

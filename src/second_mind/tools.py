@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -93,6 +95,11 @@ class ToolContext:
     transport: str
     user_id: str | None = None
     allow_external: bool = False
+    agent_id: str = ""
+    conversation_id: str | None = None
+    run_id: str | None = None
+    dry_run: bool = False
+    confirmed_action_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -123,6 +130,7 @@ class SystemTools:
         reminders: ReminderRepository,
         documents: DocumentRepository,
         telegram_sender: Callable[[str, str], Awaitable[None]] | None = None,
+        control: Any | None = None,
     ) -> None:
         self.tasks = tasks
         self.memories = memories
@@ -130,6 +138,7 @@ class SystemTools:
         self.reminders = reminders
         self.documents = documents
         self.telegram_sender = telegram_sender
+        self.control = control
         self.specs: dict[str, ToolSpec] = {}
         self._register_all()
 
@@ -165,21 +174,147 @@ class SystemTools:
     async def execute(
         self, name: str, arguments: dict[str, Any], context: ToolContext
     ) -> dict[str, Any]:
+        started = time.perf_counter()
         spec = self.specs.get(name)
         if spec is None:
             return {"ok": False, "error": f"Unknown tool: {name}"}
-        if spec.permission == "external" and not context.allow_external:
-            return {"ok": False, "error": "External action requires explicit user confirmation"}
+        policy = "confirm" if spec.permission == "external" else "auto"
+        timeout_seconds = 60
+        if self.control is not None and context.agent_id:
+            if not await self.control.agent_allows_tool(context.agent_id, name):
+                result = {"ok": False, "error": "Tool is not allowed for this agent"}
+                await self._record(name, arguments, context, "deny", result, started)
+                return result
+            policy = await self.control.tool_policy(context.agent_id, name, spec.permission)
+            timeout_seconds = await self.control.tool_timeout(context.agent_id, name)
+            if await self.control.agent_requires_confirmation(context.agent_id, spec.permission):
+                policy = "confirm"
+        if policy == "deny":
+            result = {"ok": False, "error": "Tool execution is prohibited by backend policy"}
+            await self._record(name, arguments, context, policy, result, started)
+            return result
+        if context.dry_run and spec.permission != "read":
+            result = {
+                "ok": True,
+                "dry_run": True,
+                "executed": False,
+                "message": "Mutation validated but not executed in Dry Run mode",
+            }
+            try:
+                spec.schema.model_validate(arguments)
+            except ValidationError as exc:
+                result = {"ok": False, "error": "Invalid tool arguments", "details": exc.errors()}
+            await self._record(name, arguments, context, policy, result, started)
+            return result
+        requires_confirmation = policy == "confirm" or (
+            spec.permission == "external" and not context.allow_external
+        )
+        if requires_confirmation and not context.confirmed_action_id:
+            if self.control is None or not context.agent_id:
+                return {"ok": False, "error": "External action requires explicit user confirmation"}
+            try:
+                spec.schema.model_validate(arguments)
+            except ValidationError as exc:
+                result = {"ok": False, "error": "Invalid tool arguments", "details": exc.errors()}
+                await self._record(name, arguments, context, policy, result, started)
+                return result
+            approval = await self.control.create_approval(
+                run_id=context.run_id,
+                conversation_id=context.conversation_id,
+                transport=context.transport,
+                user_id=context.user_id,
+                agent_id=context.agent_id,
+                tool_name=name,
+                arguments=arguments,
+            )
+            result = {
+                "ok": False,
+                "requires_confirmation": True,
+                "approval_id": approval["id"],
+                "message": "Action is waiting for user confirmation",
+            }
+            await self._record(name, arguments, context, policy, result, started)
+            return result
+        if context.confirmed_action_id and self.control is not None:
+            approval = await self.control.get_approval(context.confirmed_action_id)
+            if (
+                not approval
+                or approval["status"] not in {"pending", "approved"}
+                or approval["agent_id"] != context.agent_id
+                or approval["tool_name"] != name
+                or approval["arguments"] != arguments
+            ):
+                result = {"ok": False, "error": "Invalid or expired action confirmation"}
+                await self._record(name, arguments, context, policy, result, started)
+                return result
         try:
             parsed = spec.schema.model_validate(arguments)
             result = spec.handler(parsed, context)
             if not inspect.isawaitable(result):
                 raise RuntimeError("Tool handler must be async")
-            return await result
+            resolved = await asyncio.wait_for(result, timeout=timeout_seconds)
         except ValidationError as exc:
-            return {"ok": False, "error": "Invalid tool arguments", "details": exc.errors()}
+            resolved = {"ok": False, "error": "Invalid tool arguments", "details": exc.errors()}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            resolved = {"ok": False, "error": str(exc)}
+        await self._record(name, arguments, context, policy, resolved, started)
+        if context.confirmed_action_id and self.control is not None:
+            await self.control.resolve_approval(
+                context.confirmed_action_id,
+                "completed" if resolved.get("ok") else "failed",
+                resolved,
+            )
+        return resolved
+
+    async def _record(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: ToolContext,
+        policy: str,
+        result: dict[str, Any],
+        started: float,
+    ) -> None:
+        if self.control is None:
+            return
+        status = (
+            "pending_confirmation"
+            if result.get("requires_confirmation")
+            else "completed"
+            if result.get("ok")
+            else "failed"
+        )
+        await self.control.record_tool_call(
+            run_id=context.run_id,
+            agent_id=context.agent_id,
+            tool_name=name,
+            policy=policy,
+            status=status,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            arguments=arguments,
+            result=result,
+        )
+
+    async def approve(self, approval_id: str) -> dict[str, Any]:
+        if self.control is None:
+            return {"ok": False, "error": "Approval store is unavailable"}
+        approval = await self.control.get_approval(approval_id)
+        if not approval or approval["status"] != "pending":
+            return {"ok": False, "error": "Pending approval not found"}
+        await self.control.resolve_approval(approval_id, "approved")
+        return await self.execute(
+            approval["tool_name"],
+            approval["arguments"],
+            ToolContext(
+                transport=approval["transport"],
+                user_id=approval["user_id"],
+                allow_external=True,
+                agent_id=approval["agent_id"],
+                conversation_id=approval["conversation_id"],
+                run_id=approval["run_id"],
+                confirmed_action_id=approval_id,
+            ),
+        )
 
     async def _create_task(self, raw: BaseModel, context: ToolContext) -> dict[str, Any]:
         args = CreateTaskArgs.model_validate(raw.model_dump())
@@ -257,4 +392,3 @@ class SystemTools:
             return {"ok": False, "error": "Telegram is not running"}
         await self.telegram_sender(args.user_id, args.text)
         return {"ok": True}
-

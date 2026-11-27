@@ -75,6 +75,10 @@ class AppSettings(BaseModel):
         return self.data_dir / "backups"
 
     @property
+    def skills_dir(self) -> Path:
+        return self.data_dir / "skills"
+
+    @property
     def api_url(self) -> str:
         host = "127.0.0.1" if self.api_host in {"localhost", "::1"} else self.api_host
         return f"http://{host}:{self.api_port}"

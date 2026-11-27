@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$CurrentInstaller,
     [Parameter(Mandatory = $true)][string]$CurrentVersion,
     [string]$PreviousInstaller,
-    [string]$PreviousVersion
+    [string]$PreviousVersion,
+    [ValidateRange(1024, 65535)][int]$ApiPort = 8765
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,7 @@ New-Item -ItemType Directory -Path $ResolvedTestRoot | Out-Null
 $InstallDir = Join-Path $ResolvedTestRoot "application"
 $CoreProcess = $null
 $ControlDataCreated = $false
+$ApiBaseUrl = "http://127.0.0.1:$ApiPort"
 
 function Install-SecondMind([string]$Installer, [bool]$RequireUpdater) {
     $process = Start-Process -FilePath $Installer -ArgumentList @(
@@ -28,7 +30,7 @@ function Install-SecondMind([string]$Installer, [bool]$RequireUpdater) {
         "/NORESTART",
         "/CURRENTUSER",
         "/TASKS=",
-        "/DIR=$InstallDir"
+        "/DIR=`"$InstallDir`""
     ) -PassThru -Wait -WindowStyle Hidden
     if ($process.ExitCode -ne 0) {
         throw "Installer failed with exit code $($process.ExitCode)."
@@ -93,7 +95,7 @@ subprocess.Popen(
     $deadline = [DateTime]::UtcNow.AddSeconds(180)
     do {
         try {
-            $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/ping" -TimeoutSec 3
+            $health = Invoke-RestMethod -Uri "$ApiBaseUrl/api/ping" -TimeoutSec 3
             if ($health.version -eq $ExpectedVersion) {
                 return
             }
@@ -101,7 +103,7 @@ subprocess.Popen(
             try {
                 # v0.1.0 predates /api/ping; OpenAPI metadata is lightweight
                 # and does not call external LLM health checks.
-                $legacyMetadata = Invoke-RestMethod -Uri "http://127.0.0.1:8765/openapi.json" -TimeoutSec 3
+                $legacyMetadata = Invoke-RestMethod -Uri "$ApiBaseUrl/openapi.json" -TimeoutSec 3
                 if ($legacyMetadata.info.version -eq $ExpectedVersion) {
                     return
                 }
@@ -115,7 +117,7 @@ subprocess.Popen(
 
 function Stop-Core {
     try {
-        Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/system/shutdown" -TimeoutSec 5 | Out-Null
+        Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/system/shutdown" -TimeoutSec 5 | Out-Null
     } catch {
     }
     if ($script:CoreProcess) {
@@ -154,12 +156,15 @@ function Uninstall-SecondMind {
 
 try {
     $CleanData = Join-Path $ResolvedTestRoot "clean-data"
+    New-Item -ItemType Directory -Path $CleanData -Force | Out-Null
+    @{ api_port = $ApiPort } | ConvertTo-Json |
+        Set-Content -LiteralPath (Join-Path $CleanData "config.json") -Encoding UTF8
     Install-SecondMind $CurrentInstaller $true
     Start-Core $CleanData $CurrentVersion
-    $created = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/tasks" `
+    $created = Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/tasks" `
         -ContentType "application/json" -Body '{"title":"clean-install-marker"}'
     if (-not $created.id) { throw "Clean install API smoke test failed." }
-    Invoke-RestMethod -Method Patch -Uri "http://127.0.0.1:8765/api/settings" `
+    Invoke-RestMethod -Method Patch -Uri "$ApiBaseUrl/api/settings" `
         -ContentType "application/json" `
         -Body '{"setup_completed":true,"automatic_update_checks":true}' | Out-Null
     Test-DesktopStartup
@@ -182,13 +187,13 @@ try {
         }
         New-Item -ItemType Directory -Path $ResolvedControlData | Out-Null
         $ControlDataCreated = $true
-        @{ data_dir = $UpgradeData } | ConvertTo-Json |
+        @{ data_dir = $UpgradeData; api_port = $ApiPort } | ConvertTo-Json |
             Set-Content -LiteralPath (Join-Path $ResolvedControlData "config.json") -Encoding UTF8
         Install-SecondMind $PreviousInstaller $false
         Start-Core "" $PreviousVersion
-        Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/tasks" `
+        Invoke-RestMethod -Method Post -Uri "$ApiBaseUrl/api/tasks" `
             -ContentType "application/json" -Body '{"title":"upgrade-preservation-marker"}' | Out-Null
-        Invoke-RestMethod -Method Patch -Uri "http://127.0.0.1:8765/api/settings" `
+        Invoke-RestMethod -Method Patch -Uri "$ApiBaseUrl/api/settings" `
             -ContentType "application/json" -Body '{"setup_completed":true}' | Out-Null
         $UpgradeDatabase = Join-Path $UpgradeData "second-mind.db"
         if (-not (Test-Path -LiteralPath $UpgradeDatabase)) {
@@ -198,8 +203,8 @@ try {
 
         Install-SecondMind $CurrentInstaller $true
         Start-Core "" $CurrentVersion
-        $tasks = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/tasks"
-        $settings = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/settings"
+        $tasks = Invoke-RestMethod -Uri "$ApiBaseUrl/api/tasks"
+        $settings = Invoke-RestMethod -Uri "$ApiBaseUrl/api/settings"
         if (-not ($tasks.title -contains "upgrade-preservation-marker")) {
             throw "Upgrade did not preserve the database."
         }

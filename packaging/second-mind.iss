@@ -1,6 +1,6 @@
 #define MyAppName "Second Mind"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.1"
+  #define MyAppVersion "0.4.0"
 #endif
 #define MyAppPublisher "Second Mind Contributors"
 #define MyAppExeName "second-mind-desktop.exe"

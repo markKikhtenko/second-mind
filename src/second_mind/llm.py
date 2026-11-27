@@ -62,17 +62,29 @@ class LMStudioProvider:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        model = await self.resolve_model()
+        model = model or await self.resolve_model()
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": temperature,
             "tools": tools,
             "tool_choice": "auto",
         }
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if reasoning_effort:
+            body["reasoning_effort"] = reasoning_effort
         try:
-            async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout_seconds or self.settings.llm_timeout_seconds
+            ) as client:
                 response = await client.post(
                     f"{self.settings.llm_base_url}/v1/chat/completions",
                     headers=self._headers(),
@@ -80,7 +92,10 @@ class LMStudioProvider:
                 )
                 response.raise_for_status()
                 payload = response.json()
-                return dict(payload["choices"][0]["message"])
+                message = dict(payload["choices"][0]["message"])
+                if isinstance(payload.get("usage"), dict):
+                    message["_usage"] = payload["usage"]
+                return message
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
             detail = str(exc)
             if isinstance(exc, httpx.HTTPStatusError):

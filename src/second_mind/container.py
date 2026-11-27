@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import __version__
+from .agent_engine import AgentEngineStore
 from .config import AppSettings, ConfigManager, SecretStore
 from .db import Database
 from .llm import LMStudioProvider
@@ -51,11 +52,17 @@ class Container:
             self.settings, self.config_manager, self.db, self.logs
         )
         self.documents = DocumentRepository(self.db)
+        self.agent_engine = AgentEngineStore(self.db, self.settings)
         self.llm = LMStudioProvider(self.settings, self.secrets)
         self.speech = SpeechService(self.settings)
         self.document_service = DocumentService(self.settings, self.documents)
         self.tools = SystemTools(
-            self.tasks, self.memories, self.projects, self.reminders, self.documents
+            self.tasks,
+            self.memories,
+            self.projects,
+            self.reminders,
+            self.documents,
+            control=self.agent_engine,
         )
         self.chat = ChatService(
             self.llm,
@@ -64,6 +71,8 @@ class Container:
             self.tasks,
             self.tools,
             self.logs,
+            self.agent_engine,
+            self.settings,
         )
         self.telegram = TelegramGateway(
             self.settings,
@@ -80,6 +89,7 @@ class Container:
 
     async def start(self) -> None:
         await self.db.initialize()
+        await self.agent_engine.initialize()
         self.settings.attachments_dir.mkdir(parents=True, exist_ok=True)
         self.scheduler.start()
         if self.settings.telegram_enabled:

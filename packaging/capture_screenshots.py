@@ -29,9 +29,15 @@ def main() -> None:
     captures = [
         ("dark", "overview"),
         ("dark", "assistant"),
+        ("dark", "agents"),
+        ("dark", "skills"),
+        ("dark", "playground"),
         ("dark", "storage"),
         ("light", "overview"),
         ("light", "assistant"),
+        ("light", "agents"),
+        ("light", "skills"),
+        ("light", "playground"),
         ("light", "storage"),
     ]
 

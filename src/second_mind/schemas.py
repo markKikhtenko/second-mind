@@ -104,6 +104,7 @@ class ChatRequest(BaseModel):
     transport: Literal["desktop", "telegram", "api"] = "desktop"
     user_id: str | None = None
     images: list[str] = Field(default_factory=list, max_length=8)
+    dry_run: bool = False
 
 
 class ToolEvent(BaseModel):
@@ -116,6 +117,75 @@ class ChatResponse(BaseModel):
     conversation_id: str
     text: str
     tool_events: list[ToolEvent] = Field(default_factory=list)
+    run_id: str | None = None
+    agent_id: str | None = None
+    skills: list[str] = Field(default_factory=list)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentConfigCreate(BaseModel):
+    id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2_000)
+    system_prompt: str = Field(min_length=1, max_length=100_000)
+    enabled: bool = True
+    model: str | None = Field(default=None, max_length=500)
+    inherit_global_model: bool = True
+    temperature: float = Field(default=0.2, ge=0, le=2)
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
+    context_limit: int = Field(default=16_000, ge=1_024, le=1_000_000)
+    generation_limit: int = Field(default=2_048, ge=64, le=100_000)
+    timeout_seconds: int = Field(default=180, ge=5, le=900)
+    max_tool_calls: int = Field(default=8, ge=0, le=64)
+    tools: list[str] = Field(default_factory=list, max_length=100)
+    skills: list[str] = Field(default_factory=list, max_length=100)
+    memory_policy: Literal["none", "relevant"] = "relevant"
+    confirmation_policy: Literal["policy", "always"] = "policy"
+
+
+class AgentConfigUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2_000)
+    system_prompt: str | None = Field(default=None, min_length=1, max_length=100_000)
+    enabled: bool | None = None
+    model: str | None = Field(default=None, max_length=500)
+    inherit_global_model: bool | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
+    context_limit: int | None = Field(default=None, ge=1_024, le=1_000_000)
+    generation_limit: int | None = Field(default=None, ge=64, le=100_000)
+    timeout_seconds: int | None = Field(default=None, ge=5, le=900)
+    max_tool_calls: int | None = Field(default=None, ge=0, le=64)
+    tools: list[str] | None = Field(default=None, max_length=100)
+    skills: list[str] | None = Field(default=None, max_length=100)
+    memory_policy: Literal["none", "relevant"] | None = None
+    confirmation_policy: Literal["policy", "always"] | None = None
+
+
+class SkillPayload(BaseModel):
+    content: str = Field(min_length=1, max_length=500_000)
+    enabled: bool = True
+
+
+class SkillToggle(BaseModel):
+    enabled: bool
+
+
+class SkillPathRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=32_000)
+
+
+class ToolPolicyUpdate(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=80)
+    policy: Literal["auto", "confirm", "deny"]
+    timeout_seconds: int = Field(default=60, ge=1, le=900)
+
+
+class PlaygroundRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=200_000)
+    agent_id: str | None = Field(default=None, max_length=80)
+    skill_ids: list[str] = Field(default_factory=list, max_length=20)
+    mode: Literal["dry_run", "execution"] = "dry_run"
 
 
 class SettingsPatch(BaseModel):

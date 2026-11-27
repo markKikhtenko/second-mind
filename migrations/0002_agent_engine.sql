@@ -1,0 +1,3 @@
+-- Human-readable mirror of migration 2 embedded in second_mind.db.MIGRATIONS.
+-- Adds the persistent Agent Engine, Skills, tool policy and execution monitoring schema.
+-- The executable, upgrade-safe SQL lives in src/second_mind/db.py.

@@ -4,6 +4,34 @@ All notable changes follow Keep a Changelog. Versions use Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-27
+
+### Added
+
+- Persistent Agent Engine with Personal, Memory, Task, Calendar, Document and Technical profiles using one shared LM Studio Runtime.
+- Deterministic intent routing for simple requests, mixed-request coordination, bounded Context Manager, sequential LLM queue, retry, timeout, iteration limits and cancellation.
+- Complete agent GUI for create, edit, clone, delete, import, export, enable/disable, factory reset and Dry Run testing.
+- Versioned library of 19 standard `SKILL.md` files with YAML frontmatter, validation and progressive disclosure.
+- Skills Manager for search, inspection, creation, editing, import/export, enable/disable, agent assignment, testing and built-in restore.
+- Backend-enforced tool policies (`auto`, `confirm`, `deny`), per-agent allowlists, timeouts, strict validation, Dry Run and persistent call history.
+- Persisted action approvals that can be completed from Desktop, Telegram commands or the local API.
+- Agent Playground and execution monitoring with selected agent, model, Skills, tools, stages, timing, queue state and token usage when LM Studio reports it.
+- Migration 2 preserving all v0.3 data while adding agent, skill, policy, approval, tool-history and run tables.
+- Russian deterministic tests for routing, memory, tasks, deadlines, multiple actions, deduplication, malformed model output, unavailable tools, limits, cancellation and prompt injection boundaries.
+
+### Changed
+
+- Desktop and Telegram now use the same orchestrated chat path; MCP reuses the same Tool Registry and backend policy control plane.
+- Chat displays only factual execution stages and tool results, never hidden model reasoning.
+- Built-in Skills ship inside the Core bundle; custom Skills and built-in overrides live under the user data directory and survive updates.
+- Application version is 0.4.0 across Python metadata, Core, Desktop and Inno Setup.
+
+### Security
+
+- Retrieved memory and document text remain delimited as untrusted data and cannot grant tools or alter backend policy.
+- Mutating tools can be validated without execution; prohibited and unassigned tools are rejected outside the prompt layer.
+- External Telegram actions require a persisted approval by default and all approval outcomes are auditable.
+
 ## [0.3.1] - 2026-11-27
 
 ### Fixed

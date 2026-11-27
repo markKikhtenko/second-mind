@@ -20,6 +20,7 @@ async def container() -> Container:
             if _container is None:
                 value = Container()
                 await value.db.initialize()
+                await value.agent_engine.initialize()
                 _container = value
     return _container
 
@@ -29,7 +30,7 @@ async def execute(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return await value.tools.execute(
         name,
         arguments,
-        ToolContext(transport="mcp", allow_external=name == "send_telegram_message"),
+        ToolContext(transport="mcp", agent_id="personal", allow_external=False),
     )
 
 

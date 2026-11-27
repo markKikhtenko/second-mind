@@ -142,7 +142,110 @@ MIGRATIONS: list[tuple[int, str]] = [
             created_at TEXT NOT NULL
         );
         """,
-    )
+    ),
+    (
+        2,
+        """
+        CREATE TABLE IF NOT EXISTS agent_configs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            system_prompt TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            model TEXT,
+            inherit_global_model INTEGER NOT NULL DEFAULT 1,
+            temperature REAL NOT NULL DEFAULT 0.2,
+            reasoning_effort TEXT,
+            context_limit INTEGER NOT NULL DEFAULT 16000,
+            generation_limit INTEGER NOT NULL DEFAULT 2048,
+            timeout_seconds INTEGER NOT NULL DEFAULT 180,
+            max_tool_calls INTEGER NOT NULL DEFAULT 8,
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            memory_policy TEXT NOT NULL DEFAULT 'relevant',
+            confirmation_policy TEXT NOT NULL DEFAULT 'policy',
+            is_builtin INTEGER NOT NULL DEFAULT 0,
+            default_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            content TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            is_builtin INTEGER NOT NULL DEFAULT 0,
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            source_path TEXT,
+            default_content TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS agent_skills (
+            agent_id TEXT NOT NULL REFERENCES agent_configs(id) ON DELETE CASCADE,
+            skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+            PRIMARY KEY(agent_id, skill_id)
+        );
+        CREATE TABLE IF NOT EXISTS tool_policies (
+            agent_id TEXT NOT NULL REFERENCES agent_configs(id) ON DELETE CASCADE,
+            tool_name TEXT NOT NULL,
+            policy TEXT NOT NULL CHECK(policy IN ('auto', 'confirm', 'deny')),
+            timeout_seconds INTEGER NOT NULL DEFAULT 60,
+            PRIMARY KEY(agent_id, tool_name)
+        );
+        CREATE TABLE IF NOT EXISTS tool_call_history (
+            id TEXT PRIMARY KEY,
+            run_id TEXT,
+            agent_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            policy TEXT NOT NULL,
+            status TEXT NOT NULL,
+            duration_ms INTEGER,
+            arguments_json TEXT NOT NULL DEFAULT '{}',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_history_created
+            ON tool_call_history(created_at DESC);
+        CREATE TABLE IF NOT EXISTS tool_approvals (
+            id TEXT PRIMARY KEY,
+            run_id TEXT,
+            conversation_id TEXT,
+            transport TEXT NOT NULL,
+            user_id TEXT,
+            agent_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            arguments_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            result_json TEXT,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_approvals_status
+            ON tool_approvals(status, created_at DESC);
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            transport TEXT NOT NULL,
+            agent_id TEXT,
+            model TEXT,
+            skills_json TEXT NOT NULL DEFAULT '[]',
+            stage TEXT NOT NULL,
+            status TEXT NOT NULL,
+            llm_calls INTEGER NOT NULL DEFAULT 0,
+            tool_calls INTEGER NOT NULL DEFAULT 0,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            trace_json TEXT NOT NULL DEFAULT '[]',
+            error TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            duration_ms INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_started
+            ON agent_runs(started_at DESC);
+        """,
+    ),
 ]
 
 

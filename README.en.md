@@ -4,20 +4,27 @@ Second Mind is a local-first personal AI assistant for Windows. It combines an i
 
 [Русская документация](README.md) · [Architecture](docs/architecture.md) · [Storage](docs/storage.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
 
-## Version 0.3.1
+## Version 0.4.0
 
-Version 0.3.1 includes the v0.3 redesign and storage release plus a critical Windows Desktop startup fix. It provides a unified responsive design system, Russian-localized light/dark/system themes, a redesigned Dashboard and assistant, user-data management, and a complete local SQLite Storage Manager. Future features are explicitly labeled and never represented by demo data.
+Version 0.4.0 adds a persistent Agent Engine, six configurable profiles, standard Agent Skills, backend tool policies, an Agent Playground and factual execution monitoring on top of one shared local LM Studio Runtime.
 
 | Dark | Light |
 | --- | --- |
 | ![Dashboard in dark theme](docs/screenshots/overview-dark.png) | ![Dashboard in light theme](docs/screenshots/overview-light.png) |
 | ![Storage in dark theme](docs/screenshots/storage-dark.png) | ![Storage in light theme](docs/screenshots/storage-light.png) |
+| ![Agents in dark theme](docs/screenshots/agents-dark.png) | ![Agents in light theme](docs/screenshots/agents-light.png) |
+| ![Skills in dark theme](docs/screenshots/skills-dark.png) | ![Skills in light theme](docs/screenshots/skills-light.png) |
 
 ## Highlights
 
 - Grouped, collapsible navigation and a compact live Core indicator.
 - Non-blocking Dashboard with real Core, LM Studio, model, Telegram, Whisper, MCP, CPU, RAM, GPU, VRAM, queue, request and error data.
 - Assistant history, Markdown and code rendering, copy actions, attachments, processing stages and transparent tool calls.
+- Sequential orchestrator with deterministic routing, bounded context, relevant Skills, retries, timeouts, action limits and cancellation.
+- Personal, Memory, Task, Calendar, Document and Technical agents with persistent GUI configuration and import/export.
+- Nineteen versioned standard `SKILL.md` files, progressive disclosure and user overrides stored outside program files.
+- Backend-enforced `auto`, `confirm` and `deny` policies, strict schemas, Dry Run, approvals and tool-call history shared by Desktop, Telegram and MCP.
+- Agent Playground and run monitoring without exposing hidden model reasoning.
 - Search, filtering, sorting, record views and CRUD for tasks, memory, projects, documents, inbox and reminders.
 - Real LM Studio model discovery, Telegram connection test and Whisper lifecycle controls.
 - SQLite Backup API support that is safe with WAL, scheduled backups, retention, integrity checks, export, restore, optimization, cleanup and staged storage relocation.
@@ -26,7 +33,7 @@ Version 0.3.1 includes the v0.3 redesign and storage release plus a critical Win
 
 ## Windows installation
 
-Download `Second-Mind-Setup-0.3.1.exe` from [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python is not required. Setup bundles Core, Desktop, MCP, the detached updater and runtime dependencies, and creates correctly branded Start menu and optional desktop shortcuts.
+Download `Second-Mind-Setup-0.4.0.exe` from [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python is not required. Setup bundles Core, Desktop, MCP, the Skill library, the detached updater and runtime dependencies, and creates correctly branded Start menu and optional desktop shortcuts.
 
 Program files are installed per user. Data remains under `%LOCALAPPDATA%\Second Mind\Second Mind`, so normal reinstall and uninstall preserve the database, attachments and settings.
 

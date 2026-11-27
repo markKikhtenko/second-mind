@@ -101,14 +101,17 @@ def test_all_desktop_pages_construct_and_themes_apply() -> None:
     client = FakeClient()
     window = MainWindow(client, theme, FakeController())  # type: ignore[arg-type]
     window.show()
-    assert len(window.pages) == 18
+    assert len(window.pages) == 20
     assert set(window.sidebar.buttons) == set(window.pages)
     window.open_page("storage")
     assert window.stack.currentWidget() is window.pages["storage"]
     theme.set_mode("light")
     assert theme.dark is False
     window.updates_page.start_automatic_checks()
-    QTest.qWait(500)
+    for _ in range(60):
+        if ("GET", "/updates/check") in client.calls:
+            break
+        QTest.qWait(50)
     assert ("GET", "/updates/check") in client.calls
     window._force_quit = True
     window.close()
