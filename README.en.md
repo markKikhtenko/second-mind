@@ -4,9 +4,9 @@ Second Mind is a local-first personal AI assistant for Windows. It combines an i
 
 [Русская документация](README.md) · [Architecture](docs/architecture.md) · [Storage](docs/storage.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
 
-## Version 0.3.0
+## Version 0.3.1
 
-Version 0.3.0 introduces a unified responsive design system, Russian-localized light/dark/system themes, a redesigned Dashboard and assistant, user-data management, and a complete local SQLite Storage Manager. Future features are explicitly labeled and never represented by demo data.
+Version 0.3.1 includes the v0.3 redesign and storage release plus a critical Windows Desktop startup fix. It provides a unified responsive design system, Russian-localized light/dark/system themes, a redesigned Dashboard and assistant, user-data management, and a complete local SQLite Storage Manager. Future features are explicitly labeled and never represented by demo data.
 
 | Dark | Light |
 | --- | --- |
@@ -26,7 +26,7 @@ Version 0.3.0 introduces a unified responsive design system, Russian-localized l
 
 ## Windows installation
 
-Download `Second-Mind-Setup-0.3.0.exe` from [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python is not required. Setup bundles Core, Desktop, MCP, the detached updater and runtime dependencies, and creates correctly branded Start menu and optional desktop shortcuts.
+Download `Second-Mind-Setup-0.3.1.exe` from [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python is not required. Setup bundles Core, Desktop, MCP, the detached updater and runtime dependencies, and creates correctly branded Start menu and optional desktop shortcuts.
 
 Program files are installed per user. Data remains under `%LOCALAPPDATA%\Second Mind\Second Mind`, so normal reinstall and uninstall preserve the database, attachments and settings.
 

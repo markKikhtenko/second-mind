@@ -27,6 +27,7 @@ from PySide6.QtCore import (
     QTimer,
     QUrl,
     Signal,
+    Slot,
 )
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QGuiApplication, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
@@ -212,6 +213,38 @@ class Worker(QRunnable):
                 self.signals.result.emit(result)
 
 
+class WorkerBridge(QObject):
+    """Deliver worker callbacks on the GUI thread and keep the runnable alive."""
+
+    def __init__(
+        self,
+        worker: Worker,
+        success: Callable[[Any], None],
+        error: Callable[[str], None],
+        parent: QObject,
+    ) -> None:
+        super().__init__(parent)
+        self.worker: Worker | None = worker
+        self.success = success
+        self.error = error
+
+    @Slot(object)
+    def deliver_result(self, value: Any) -> None:
+        try:
+            self.success(value)
+        finally:
+            self.worker = None
+            self.deleteLater()
+
+    @Slot(str)
+    def deliver_error(self, message: str) -> None:
+        try:
+            self.error(message)
+        finally:
+            self.worker = None
+            self.deleteLater()
+
+
 class ServiceController:
     def __init__(self, api_url: str) -> None:
         self.api_url = api_url
@@ -305,8 +338,13 @@ class BasePage(QWidget):
         error: Callable[[str], None] | None = None,
     ) -> None:
         worker = Worker(operation)
-        worker.signals.result.connect(success)
-        worker.signals.error.connect(error or self.show_error)
+        bridge = WorkerBridge(worker, success, error or self.show_error, self)
+        worker.signals.result.connect(
+            bridge.deliver_result, Qt.ConnectionType.QueuedConnection
+        )
+        worker.signals.error.connect(
+            bridge.deliver_error, Qt.ConnectionType.QueuedConnection
+        )
         self.pool.start(worker)
 
     def button(
@@ -962,8 +1000,10 @@ class RecordsPage(BasePage):
         return {}
 
     def refresh(self) -> None:
+        endpoint = self.endpoint
+        params = self.request_params()
         self.work(
-            lambda: self.client.request("GET", self.endpoint, params=self.request_params()),
+            lambda: self.client.request("GET", endpoint, params=params),
             self.render,
         )
 
@@ -1191,9 +1231,10 @@ class TasksPage(RecordsPage):
             return
         dialog = TaskDialog(self, row)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.payload(False)
             self.work(
                 lambda: self.client.request(
-                    "PATCH", f"/tasks/{row['id']}", json=dialog.payload(False)
+                    "PATCH", f"/tasks/{row['id']}", json=payload
                 ),
                 lambda _value: self.refresh(),
             )
@@ -1284,9 +1325,10 @@ class MemoryPage(RecordsPage):
             return
         dialog = MemoryDialog(self, row)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.payload(False)
             self.work(
                 lambda: self.client.request(
-                    "PATCH", f"/memories/{row['id']}", json=dialog.payload(False)
+                    "PATCH", f"/memories/{row['id']}", json=payload
                 ),
                 lambda _value: self.refresh(),
             )
@@ -1349,8 +1391,9 @@ class ProjectsPage(RecordsPage):
     def create_record(self) -> None:
         dialog = ProjectDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.payload(True)
             self.work(
-                lambda: self.client.request("POST", "/projects", json=dialog.payload(True)),
+                lambda: self.client.request("POST", "/projects", json=payload),
                 lambda _value: self.refresh(),
             )
 
@@ -1360,9 +1403,10 @@ class ProjectsPage(RecordsPage):
             return
         dialog = ProjectDialog(self, row)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.payload(False)
             self.work(
                 lambda: self.client.request(
-                    "PATCH", f"/projects/{row['id']}", json=dialog.payload(False)
+                    "PATCH", f"/projects/{row['id']}", json=payload
                 ),
                 lambda _value: self.refresh(),
             )
@@ -1444,10 +1488,9 @@ class RemindersPage(RecordsPage):
     def create_record(self) -> None:
         dialog = ReminderDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.payload(True)
             self.work(
-                lambda: self.client.request(
-                    "POST", "/reminders", json=dialog.payload(True)
-                ),
+                lambda: self.client.request("POST", "/reminders", json=payload),
                 lambda _value: self.refresh(),
             )
 
@@ -1457,9 +1500,10 @@ class RemindersPage(RecordsPage):
             return
         dialog = ReminderDialog(self, row)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            payload = dialog.payload(False)
             self.work(
                 lambda: self.client.request(
-                    "PATCH", f"/reminders/{row['id']}", json=dialog.payload(False)
+                    "PATCH", f"/reminders/{row['id']}", json=payload
                 ),
                 lambda _value: self.refresh(),
             )
@@ -2333,13 +2377,14 @@ class SettingsPage(BasePage):
         }
 
     def load_speech(self) -> None:
+        payload = self.speech_payload()
         self.speech_progress.setRange(0, 0)
         self.speech_status.setText(
             "Загрузка модели. Первый запуск может занять несколько минут…"
         )
 
         def operation() -> dict[str, Any]:
-            self.client.request("PATCH", "/settings", json=self.speech_payload())
+            self.client.request("PATCH", "/settings", json=payload)
             return self.client.request("POST", "/speech/load", timeout=1800)
 
         self.work(operation, self.speech_ready, self.speech_failed)
@@ -2560,7 +2605,12 @@ class UpdatesPage(BasePage):
         self.work(lambda: self.client.request("GET", "/settings"), configured)
 
     def check_updates(self, manual: bool) -> None:
-        if not self.repository.text().strip():
+        payload = {
+            "update_repository": self.repository.text().strip(),
+            "automatic_update_checks": self.automatic.isChecked(),
+            "update_check_interval_hours": self.update_interval.value(),
+        }
+        if not payload["update_repository"]:
             if manual:
                 self.show_error("Укажите GitHub-репозиторий обновлений.")
             return
@@ -2569,15 +2619,7 @@ class UpdatesPage(BasePage):
         self.status_label.setText("Проверяю GitHub Releases и подпись манифеста…")
 
         def operation() -> dict[str, Any]:
-            self.client.request(
-                "PATCH",
-                "/settings",
-                json={
-                    "update_repository": self.repository.text().strip(),
-                    "automatic_update_checks": self.automatic.isChecked(),
-                    "update_check_interval_hours": self.update_interval.value(),
-                },
-            )
+            self.client.request("PATCH", "/settings", json=payload)
             return self.client.request("GET", "/updates/check", timeout=45)
 
         self.work(operation, self.render_release, self.check_failed)
@@ -2681,11 +2723,12 @@ class UpdatesPage(BasePage):
             != QMessageBox.StandardButton.Yes
         ):
             return
+        download_path = self.download["path"]
         self.work(
             lambda: self.client.request(
                 "POST",
                 "/updates/install",
-                params={"path": self.download["path"]},
+                params={"path": download_path},
                 timeout=120,
             ),
             self.launch_updater,

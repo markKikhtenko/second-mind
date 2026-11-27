@@ -4,6 +4,16 @@ All notable changes follow Keep a Changelog. Versions use Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-27
+
+### Fixed
+
+- Prevented a native Qt access violation at Desktop startup by capturing widget values on the GUI thread before automatic update checks run in a worker.
+- Routed every background-worker completion callback explicitly through a GUI-thread QObject bridge.
+- Removed the same unsafe cross-thread widget access from record loading/editing and Whisper model loading.
+- Added an installed Desktop startup smoke test to the Windows release gate.
+- Added a multi-resolution Windows icon for shortcuts, the application, installer, tray and High DPI displays.
+
 ## [0.3.0] - 2026-11-27
 
 ### Added

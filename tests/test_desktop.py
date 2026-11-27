@@ -9,13 +9,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from second_mind.desktop import MainWindow, ThemeManager  # noqa: E402
 
 
 class FakeClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
     def request(self, _method: str, path: str, **_kwargs: Any) -> Any:
+        self.calls.append((_method, path))
         if path == "/health":
             return {
                 "time": "2026-11-27T10:00:00+00:00",
@@ -48,11 +53,30 @@ class FakeClient:
         if path == "/settings":
             return {
                 "update_repository": "markKikhtenko/second-mind",
-                "automatic_update_checks": False,
+                "automatic_update_checks": True,
                 "update_check_interval_hours": 24,
             }
         if path == "/updates/status":
             return {"phase": "idle"}
+        if path == "/updates/check":
+            return {
+                "current_version": "0.3.1",
+                "latest_version": "0.3.1",
+                "available": False,
+                "changelog": "Thread-safe desktop startup",
+            }
+        if path == "/storage":
+            return {
+                "database_path": "C:/Second Mind/second-mind.db",
+                "data_dir": "C:/Second Mind",
+                "integrity": {"ok": True, "message": "ok"},
+                "schema_version": 1,
+                "counts": {},
+                "backups": [],
+                "automatic_backups": True,
+                "backup_interval_hours": 24,
+                "backup_retention_days": 30,
+            }
         return []
 
 
@@ -74,13 +98,18 @@ def test_all_desktop_pages_construct_and_themes_apply() -> None:
     app = QApplication.instance() or QApplication([])
     theme = ThemeManager(app)
     theme.set_mode("dark")
-    window = MainWindow(FakeClient(), theme, FakeController())  # type: ignore[arg-type]
+    client = FakeClient()
+    window = MainWindow(client, theme, FakeController())  # type: ignore[arg-type]
+    window.show()
     assert len(window.pages) == 18
     assert set(window.sidebar.buttons) == set(window.pages)
     window.open_page("storage")
     assert window.stack.currentWidget() is window.pages["storage"]
     theme.set_mode("light")
     assert theme.dark is False
+    window.updates_page.start_automatic_checks()
+    QTest.qWait(500)
+    assert ("GET", "/updates/check") in client.calls
     window._force_quit = True
     window.close()
     app.processEvents()

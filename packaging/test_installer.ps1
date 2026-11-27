@@ -128,6 +128,18 @@ function Stop-Core {
     }
 }
 
+function Test-DesktopStartup {
+    $desktop = Join-Path $InstallDir "second-mind-desktop\second-mind-desktop.exe"
+    $desktopProcess = Start-Process -FilePath $desktop -ArgumentList @(
+        "--theme", "dark"
+    ) -PassThru -WindowStyle Hidden
+    if ($desktopProcess.WaitForExit(12000)) {
+        throw "Desktop crashed during startup with exit code $($desktopProcess.ExitCode)."
+    }
+    Stop-Process -Id $desktopProcess.Id
+    $desktopProcess.WaitForExit(10000) | Out-Null
+}
+
 function Uninstall-SecondMind {
     $uninstaller = Join-Path $InstallDir "unins000.exe"
     if (Test-Path -LiteralPath $uninstaller) {
@@ -147,6 +159,10 @@ try {
     $created = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/api/tasks" `
         -ContentType "application/json" -Body '{"title":"clean-install-marker"}'
     if (-not $created.id) { throw "Clean install API smoke test failed." }
+    Invoke-RestMethod -Method Patch -Uri "http://127.0.0.1:8765/api/settings" `
+        -ContentType "application/json" `
+        -Body '{"setup_completed":true,"automatic_update_checks":true}' | Out-Null
+    Test-DesktopStartup
     Stop-Core
     Uninstall-SecondMind
     if (-not (Test-Path -LiteralPath (Join-Path $CleanData "second-mind.db"))) {

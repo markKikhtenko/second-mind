@@ -4,7 +4,7 @@
 
 [English documentation](README.en.md) · [Архитектура](docs/architecture.md) · [Хранилище](docs/storage.md) · [Roadmap](ROADMAP.md) · [Безопасность](SECURITY.md)
 
-> Актуальная версия: **0.3.0**. Релиз добавляет единую дизайн-систему, полностью русскоязычный PySide6 GUI, новый Dashboard и ассистент, управление пользовательскими данными и полноценный менеджер локального SQLite-хранилища. Возможности следующих этапов явно помечены как «Скоро» и не имитируют работу.
+> Актуальная версия: **0.3.1**. Hotfix устраняет критическое падение Desktop при запуске в Windows и улучшает отображение фирменной иконки в ярлыках и High DPI. В состав релиза также входят единая дизайн-система, русскоязычный PySide6 GUI, новый Dashboard, ассистент и менеджер SQLite-хранилища.
 
 ## Интерфейс
 
@@ -33,7 +33,7 @@
 
 ## Установка Windows
 
-Скачайте `Second-Mind-Setup-0.3.0.exe` из [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python и командная строка не нужны: установщик включает Core, Desktop, MCP, updater и runtime-зависимости.
+Скачайте `Second-Mind-Setup-0.3.1.exe` из [GitHub Releases](https://github.com/markKikhtenko/second-mind/releases). Python и командная строка не нужны: установщик включает Core, Desktop, MCP, updater и runtime-зависимости.
 
 Установщик создаёт ярлык в меню «Пуск», предлагает ярлык рабочего стола и автозапуск Core. Программа устанавливается для текущего пользователя, а данные находятся отдельно в `%LOCALAPPDATA%\Second Mind\Second Mind`, поэтому обычная переустановка или удаление приложения их не стирает.
 
